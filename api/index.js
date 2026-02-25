@@ -157,10 +157,11 @@ var GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInf
 var OAuthService = class {
   constructor(client) {
     this.client = client;
-    console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
-    if (!ENV.oAuthServerUrl) {
-      console.error(
-        "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
+    if (ENV.oAuthServerUrl) {
+      console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
+    } else {
+      console.warn(
+        "[OAuth] OAUTH_SERVER_URL is not configured. OAuth login will not work."
       );
     }
   }
@@ -547,43 +548,6 @@ var systemRouter = router({
   })
 });
 
-// server/routers.ts
-var appRouter = router({
-  // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
-  system: systemRouter,
-  auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true
-      };
-    })
-  })
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
-});
-
-// server/_core/context.ts
-async function createContext(opts) {
-  let user = null;
-  try {
-    user = await sdk.authenticateRequest(opts.req);
-  } catch (error) {
-    user = null;
-  }
-  return {
-    req: opts.req,
-    res: opts.res,
-    user
-  };
-}
-
 // server/lib/bitfinex.ts
 import crypto from "crypto";
 function generateSignature(path2, nonce, body, secret) {
@@ -739,13 +703,7 @@ function sleep2(ms) {
 }
 
 // server/cron/daily-report.ts
-async function dailyReportHandler(req, res) {
-  const authHeader = req.headers.authorization;
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
+async function runDailyReport() {
   const startTime = Date.now();
   console.log(`[CronJob] \u958B\u59CB\u57F7\u884C\u6BCF\u65E5\u5229\u606F\u5831\u544A - ${(/* @__PURE__ */ new Date()).toISOString()}`);
   const account1Key = process.env.BITFINEX_ACCOUNT1_KEY ?? "";
@@ -766,8 +724,7 @@ async function dailyReportHandler(req, res) {
   if (missingVars.length > 0) {
     const errMsg = `\u7F3A\u5C11\u5FC5\u8981\u74B0\u5883\u8B8A\u6578: ${missingVars.join(", ")}`;
     console.error(`[CronJob] ${errMsg}`);
-    res.status(500).json({ error: errMsg });
-    return;
+    return { success: false, error: errMsg };
   }
   console.log("[CronJob] \u4E26\u884C\u67E5\u8A62\u5169\u500B\u5E33\u6236\u5229\u606F...");
   const accounts = [
@@ -787,31 +744,72 @@ async function dailyReportHandler(req, res) {
   console.log("[CronJob] \u767C\u9001 Telegram \u901A\u77E5...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);
   const elapsed = ((Date.now() - startTime) / 1e3).toFixed(2);
+  const mappedResults = results.map((r) => ({
+    account: r.accountName,
+    interest: r.totalInterest,
+    entries: r.entries,
+    error: r.error
+  }));
   if (telegramResult.success) {
     console.log(`[CronJob] \u2705 \u5B8C\u6210 (\u8017\u6642 ${elapsed}s)`);
-    res.status(200).json({
-      success: true,
-      elapsed: `${elapsed}s`,
-      results: results.map((r) => ({
-        account: r.accountName,
-        interest: r.totalInterest,
-        entries: r.entries,
-        error: r.error
-      }))
-    });
+    return { success: true, elapsed: `${elapsed}s`, results: mappedResults };
   } else {
     console.error(`[CronJob] \u274C Telegram \u767C\u9001\u5931\u6557: ${telegramResult.error}`);
-    res.status(500).json({
-      success: false,
-      error: `Telegram \u767C\u9001\u5931\u6557: ${telegramResult.error}`,
-      results: results.map((r) => ({
-        account: r.accountName,
-        interest: r.totalInterest,
-        entries: r.entries,
-        error: r.error
-      }))
-    });
+    return { success: false, error: `Telegram \u767C\u9001\u5931\u6557: ${telegramResult.error}`, results: mappedResults };
   }
+}
+async function dailyReportHandler(req, res) {
+  const authHeader = req.headers.authorization;
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const result = await runDailyReport();
+  if (result.success) {
+    res.status(200).json(result);
+  } else {
+    res.status(500).json(result);
+  }
+}
+
+// server/routers.ts
+var appRouter = router({
+  // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
+  system: systemRouter,
+  auth: router({
+    me: publicProcedure.query((opts) => opts.ctx.user),
+    logout: publicProcedure.mutation(({ ctx }) => {
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      return {
+        success: true
+      };
+    })
+  }),
+  cron: router({
+    /**
+     * 手動觸發每日利息報告（公開端點，由前端 Dashboard 呼叫）
+     */
+    triggerReport: publicProcedure.mutation(async () => {
+      return await runDailyReport();
+    })
+  })
+});
+
+// server/_core/context.ts
+async function createContext(opts) {
+  let user = null;
+  try {
+    user = await sdk.authenticateRequest(opts.req);
+  } catch (error) {
+    user = null;
+  }
+  return {
+    req: opts.req,
+    res: opts.res,
+    user
+  };
 }
 
 // server/vercel-entry.ts

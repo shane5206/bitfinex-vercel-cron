@@ -32,3 +32,8 @@
 
 - [x] 徹底修正原始碼外洩問題（修正 vercel.json：將 source 從 "/*" 改為 "/api/*"，並加入 outputDirectory: "dist/public"）
 - [x] 修復 favicon 404 錯誤（新增 favicon.png 到 client/public，更新 index.html）
+
+## 緊急修正 v5
+
+- [x] 修正手動觸發報告 Unauthorized 錯誤：將核心邏輯抽取為 runDailyReport()，前端改用 tRPC cron.triggerReport mutation
+- [x] 修正 Vercel 上 OAUTH_SERVER_URL 未設定的警告：將 console.error 改為 console.warn，降低日誌層級

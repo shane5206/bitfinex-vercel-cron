@@ -5,9 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Clock, TrendingUp, Send, CheckCircle, AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
 
 export default function Home() {
-  const [isTriggering, setIsTriggering] = useState(false);
   const [lastResult, setLastResult] = useState<{
     success: boolean;
     elapsed?: string;
@@ -15,26 +15,22 @@ export default function Home() {
     error?: string;
   } | null>(null);
 
-  const handleTriggerReport = async () => {
-    setIsTriggering(true);
-    try {
-      const res = await fetch("/api/cron/daily-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await res.json();
+  const triggerMutation = trpc.cron.triggerReport.useMutation({
+    onSuccess: (data) => {
       setLastResult(data);
       if (data.success) {
         toast.success("每日利息報告已成功發送到 Telegram！");
       } else {
         toast.error(`發送失敗：${data.error}`);
       }
-    } catch (err) {
-      toast.error("請求失敗，請稍後再試");
-    } finally {
-      setIsTriggering(false);
-    }
-  };
+    },
+    onError: (err) => {
+      toast.error(`請求失敗：${err.message}`);
+    },
+  });
+
+  const isTriggering = triggerMutation.isPending;
+  const handleTriggerReport = () => triggerMutation.mutate();
 
   const totalInterest = lastResult?.results?.reduce((sum, r) => sum + (r.interest ?? 0), 0) ?? 0;
 
