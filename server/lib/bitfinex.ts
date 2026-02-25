@@ -9,16 +9,6 @@ export interface InterestResult {
 }
 
 /**
- * 使用 HMAC-SHA384 生成 Bitfinex API 簽名
- * 注意：根據實測，自定義 HMAC 實現會返回 "apikey: invalid"
- * 必須使用官方 bitfinex-api-py 庫或以下精確實現
- */
-function generateSignature(path: string, nonce: string, body: string, secret: string): string {
-  const signatureString = `/api${path}${nonce}${body}`;
-  return crypto.createHmac("sha384", secret).update(signatureString).digest("hex");
-}
-
-/**
  * 查詢指定帳戶過去 24 小時的借貸利息
  * category=28 代表 margin/swap/interest payment
  */
@@ -30,10 +20,14 @@ export async function fetchDailyInterest(
 ): Promise<InterestResult> {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1000;
-  const path = "/auth/r/ledgers/hist";
-  const nonce = now.toString();
-  const body = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  const signature = generateSignature(path, nonce, body, apiSecret);
+  // 官方文件要求 nonce 為微秒（Date.now() * 1000）
+  const nonce = (now * 1000).toString();
+  // apiPath 格式：v2/auth/r/ledgers/hist（不含前導 /）
+  const apiPath = "v2/auth/r/ledgers/hist";
+  const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
+  // 官方簽名格式：/api/ + apiPath + nonce + body
+  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
 
   const headers = {
     "bfx-nonce": nonce,
@@ -44,10 +38,10 @@ export async function fetchDailyInterest(
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`https://api.bitfinex.com/v2${path}`, {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
         headers,
-        body,
+        body: bodyStr,
       });
 
       const data = await res.json() as unknown[];

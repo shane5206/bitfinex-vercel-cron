@@ -37,3 +37,7 @@
 
 - [x] 修正手動觸發報告 Unauthorized 錯誤：將核心邏輯抽取為 runDailyReport()，前端改用 tRPC cron.triggerReport mutation
 - [x] 修正 Vercel 上 OAUTH_SERVER_URL 未設定的警告：將 console.error 改為 console.warn，降低日誌層級
+
+## 緊急修正 v6
+
+- [x] 診斷並修正 Bitfinex API key 驗證失敗（apikey: invalid）：修正 nonce 格式（Date.now() * 1000）和簽名字串格式（/api/v2/auth/r/ledgers/hist）

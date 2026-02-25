@@ -550,17 +550,14 @@ var systemRouter = router({
 
 // server/lib/bitfinex.ts
 import crypto from "crypto";
-function generateSignature(path2, nonce, body, secret) {
-  const signatureString = `/api${path2}${nonce}${body}`;
-  return crypto.createHmac("sha384", secret).update(signatureString).digest("hex");
-}
 async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1e3;
-  const path2 = "/auth/r/ledgers/hist";
-  const nonce = now.toString();
-  const body = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  const signature = generateSignature(path2, nonce, body, apiSecret);
+  const nonce = (now * 1e3).toString();
+  const apiPath = "v2/auth/r/ledgers/hist";
+  const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
+  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
   const headers = {
     "bfx-nonce": nonce,
     "bfx-apikey": apiKey,
@@ -569,10 +566,10 @@ async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   };
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`https://api.bitfinex.com/v2${path2}`, {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
         headers,
-        body
+        body: bodyStr
       });
       const data = await res.json();
       if (!Array.isArray(data)) {
