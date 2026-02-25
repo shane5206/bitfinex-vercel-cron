@@ -1,5 +1,13 @@
 {
   "version": "7",
   "dialect": "mysql",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1772008227917,
+      "tag": "0000_noisy_firebrand",
+      "breakpoints": true
+    }
+  ]
 }
