@@ -1,4 +1,4 @@
-// api/index.ts
+// server/vercel-entry.ts
 import "dotenv/config";
 import express from "express";
 import path from "path";
@@ -814,7 +814,7 @@ async function dailyReportHandler(req, res) {
   }
 }
 
-// api/index.ts
+// server/vercel-entry.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
 var app = express();
@@ -840,7 +840,7 @@ if (fs.existsSync(distPath)) {
     res.status(200).json({ status: "ok", message: "Bitfinex Daily Interest Report API" });
   });
 }
-var index_default = app;
+var vercel_entry_default = app;
 export {
-  index_default as default
+  vercel_entry_default as default
 };

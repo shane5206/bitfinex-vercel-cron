@@ -19,6 +19,10 @@
 - [x] 確認 API 端點在 Vercel 上正常運作
 - [x] 確認 Cron Job 設定正確
 
+## 緊急修正 v3
+
+- [x] 移除 api/index.ts，將原始碼移到 server/vercel-entry.ts，避免路徑衝突
+
 ## 緊急修正 v2
 
 - [x] 從根本重構項目架構以符合 Vercel 部署規範（修復 build 腳本，編譯 api/index.ts 到 api/index.js）
