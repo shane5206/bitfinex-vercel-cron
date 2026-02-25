@@ -16,9 +16,10 @@ export function formatInterestReport(results: InterestResult[], executedAt: Date
   });
 
   const totalInterest = results.reduce((sum, r) => sum + r.totalInterest, 0);
+  const successCount = results.filter((r) => !r.error).length;
 
   let message = `📊 <b>Bitfinex 每日利息報告</b>\n`;
-  message += `<i>${dateStr} (台灣時間)</i>\n\n`;
+  message += `🗓 <i>${dateStr} (台灣時間)</i>\n\n`;
 
   for (const result of results) {
     if (result.error) {
@@ -32,8 +33,9 @@ export function formatInterestReport(results: InterestResult[], executedAt: Date
   }
 
   message += `━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `<b>今日總利息:</b>\n`;
-  message += `🎯 <b>${totalInterest.toFixed(8)} USD</b>`;
+  message += `📈 <b>今日總利息:</b>\n`;
+  message += `🎯 <b>${totalInterest.toFixed(8)} USD</b>\n`;
+  message += `<i>成功查詢 ${successCount}/${results.length} 個帳戶</i>`;
 
   return message;
 }
