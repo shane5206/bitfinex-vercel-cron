@@ -27,3 +27,8 @@
 
 - [x] 從根本重構項目架構以符合 Vercel 部署規範（修復 build 腳本，編譯 api/index.ts 到 api/index.js）
 - [x] 修正 build 腳本並推送至 GitHub
+
+## 緊急修正 v4
+
+- [x] 徹底修正原始碼外洩問題（修正 vercel.json：將 source 從 "/*" 改為 "/api/*"，並加入 outputDirectory: "dist/public"）
+- [x] 修復 favicon 404 錯誤（新增 favicon.png 到 client/public，更新 index.html）
