@@ -18,3 +18,8 @@
 - [x] 修正 Vercel 部署問題：原始碼外洩（建立 api/index.ts 導出 Express app，更新 vercel.json 使用 rewrites）
 - [x] 確認 API 端點在 Vercel 上正常運作
 - [x] 確認 Cron Job 設定正確
+
+## 緊急修正 v2
+
+- [x] 從根本重構項目架構以符合 Vercel 部署規範（修復 build 腳本，編譯 api/index.ts 到 api/index.js）
+- [x] 修正 build 腳本並推送至 GitHub

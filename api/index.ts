@@ -2,11 +2,15 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "../server/_core/oauth";
 import { appRouter } from "../server/routers";
 import { createContext } from "../server/_core/context";
 import { dailyReportHandler } from "../server/cron/daily-report";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -29,8 +33,9 @@ app.use(
   })
 );
 
-// Serve static frontend files from dist/public
-const distPath = path.resolve(process.cwd(), "dist", "public");
+// Serve static frontend files from dist/public (relative to this file's location)
+// In Vercel, this file is at /api/index.js, so dist/public is at ../dist/public
+const distPath = path.resolve(__dirname, "..", "dist", "public");
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
   app.use("*", (_req, res) => {
