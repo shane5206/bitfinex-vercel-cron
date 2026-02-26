@@ -41,3 +41,7 @@
 ## 緊急修正 v6
 
 - [x] 診斷並修正 Bitfinex API key 驗證失敗（apikey: invalid）：修正 nonce 格式（Date.now() * 1000）和簽名字串格式（/api/v2/auth/r/ledgers/hist）
+
+## 緊急修正 v7
+
+- [x] 診斷並修正 Vercel Cron Job 每天中午 12 點未自動執行：新增獨立的 api/cron/daily-report.js Vercel Function，讓 Cron Job 直接呼叫，不需經過 rewrites 轉發
