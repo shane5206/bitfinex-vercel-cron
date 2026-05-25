@@ -1,5 +1,16 @@
 import crypto from "crypto";
 
+// Bitfinex 要求同一 API key 的 nonce 嚴格遞增；用全域單調計數器避免同毫秒碰撞。
+let lastNonce = 0;
+function nextNonce(): string {
+  let nonce = Date.now() * 1000;
+  if (nonce <= lastNonce) {
+    nonce = lastNonce + 1;
+  }
+  lastNonce = nonce;
+  return nonce.toString();
+}
+
 export interface InterestResult {
   accountName: string;
   totalInterest: number;
@@ -22,23 +33,23 @@ export async function fetchDailyInterest(
 ): Promise<InterestResult> {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1000;
-  // 官方文件要求 nonce 為微秒（Date.now() * 1000）
-  const nonce = (now * 1000).toString();
   // apiPath 格式：v2/auth/r/ledgers/hist（不含前導 /）
   const apiPath = "v2/auth/r/ledgers/hist";
   const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  // 官方簽名格式：/api/ + apiPath + nonce + body
-  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
-  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
-
-  const headers = {
-    "bfx-nonce": nonce,
-    "bfx-apikey": apiKey,
-    "bfx-signature": signature,
-    "Content-Type": "application/json",
-  };
 
   for (let attempt = 1; attempt <= retries; attempt++) {
+    // 每次嘗試都用新的遞增 nonce，避免重試時 nonce 過小
+    const nonce = nextNonce();
+    // 官方簽名格式：/api/ + apiPath + nonce + body
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json",
+    };
+
     try {
       const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
@@ -104,7 +115,7 @@ export async function fetchFundingBalance(
   const bodyStr = "{}";
 
   for (let attempt = 1; attempt <= retries; attempt++) {
-    const nonce = (Date.now() * 1000).toString();
+    const nonce = nextNonce();
     const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
     const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
     const headers = {
@@ -162,12 +173,12 @@ export async function fetchAllAccountsInterest(accounts: {
   secret: string;
   name: string;
 }[]): Promise<InterestResult[]> {
+  // 不同帳戶（不同 API key）可並行；但同一帳戶的兩個請求必須序列化，
+  // 否則同一 key 的並發請求會觸發 Bitfinex「nonce: small」錯誤。
   return Promise.all(
     accounts.map(async (acc) => {
-      const [interest, principal] = await Promise.all([
-        fetchDailyInterest(acc.key, acc.secret, acc.name),
-        fetchFundingBalance(acc.key, acc.secret),
-      ]);
+      const interest = await fetchDailyInterest(acc.key, acc.secret, acc.name);
+      const principal = await fetchFundingBalance(acc.key, acc.secret);
       return { ...interest, principal };
     })
   );

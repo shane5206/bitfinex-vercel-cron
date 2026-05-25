@@ -634,21 +634,30 @@ var systemRouter = router({
 
 // server/lib/bitfinex.ts
 import crypto from "crypto";
+var lastNonce = 0;
+function nextNonce() {
+  let nonce = Date.now() * 1e3;
+  if (nonce <= lastNonce) {
+    nonce = lastNonce + 1;
+  }
+  lastNonce = nonce;
+  return nonce.toString();
+}
 async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1e3;
-  const nonce = (now * 1e3).toString();
   const apiPath = "v2/auth/r/ledgers/hist";
   const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
-  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
-  const headers = {
-    "bfx-nonce": nonce,
-    "bfx-apikey": apiKey,
-    "bfx-signature": signature,
-    "Content-Type": "application/json"
-  };
   for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json"
+    };
     try {
       const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
@@ -694,7 +703,7 @@ async function fetchFundingBalance(apiKey, apiSecret, retries = 3) {
   const apiPath = "v2/auth/r/wallets";
   const bodyStr = "{}";
   for (let attempt = 1; attempt <= retries; attempt++) {
-    const nonce = (Date.now() * 1e3).toString();
+    const nonce = nextNonce();
     const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
     const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
     const headers = {
@@ -740,10 +749,8 @@ async function fetchFundingBalance(apiKey, apiSecret, retries = 3) {
 async function fetchAllAccountsInterest(accounts) {
   return Promise.all(
     accounts.map(async (acc) => {
-      const [interest, principal] = await Promise.all([
-        fetchDailyInterest(acc.key, acc.secret, acc.name),
-        fetchFundingBalance(acc.key, acc.secret)
-      ]);
+      const interest = await fetchDailyInterest(acc.key, acc.secret, acc.name);
+      const principal = await fetchFundingBalance(acc.key, acc.secret);
       return { ...interest, principal };
     })
   );
