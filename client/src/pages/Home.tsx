@@ -39,28 +39,60 @@ export default function Home() {
 
   const totalInterest = lastResult?.results?.reduce((sum, r) => sum + (r.interest ?? 0), 0) ?? 0;
 
-  // 計算年化報酬率：每筆快照代表當日 24 小時利息，故以「涵蓋的天數」為基準
+  // 計算年化報酬率：每筆快照代表當日 24 小時利息，年化率 = 平均每日(利息/本金) × 365
   const calculateAnnualizedReturn = () => {
     if (!snapshots || snapshots.length === 0) return null;
 
-    // 依帳戶彙總累計利息，並以日曆日去重計算涵蓋天數
-    const byAccount: Record<string, { total: number; days: Set<string> }> = {};
+    type Acc = {
+      total: number;
+      days: Set<string>;
+      rateSum: number; // 各日「利息/本金」加總
+      rateDays: number; // 有本金資料的天數
+      latestPrincipal: number;
+      latestTs: number;
+    };
+    const byAccount: Record<string, Acc> = {};
+
     snapshots.forEach((snap) => {
       const interest = parseFloat(snap.interestUsd);
+      const principal = snap.principalUsd ? parseFloat(snap.principalUsd) : 0;
+      const ts = new Date(snap.snapshotDate).getTime();
       const dayKey = new Date(snap.snapshotDate).toISOString().slice(0, 10);
-      const acc = byAccount[snap.accountName] ?? { total: 0, days: new Set<string>() };
+      const acc =
+        byAccount[snap.accountName] ??
+        { total: 0, days: new Set<string>(), rateSum: 0, rateDays: 0, latestPrincipal: 0, latestTs: 0 };
       acc.total += interest;
       acc.days.add(dayKey);
+      if (principal > 0) {
+        acc.rateSum += interest / principal;
+        acc.rateDays += 1;
+      }
+      if (ts >= acc.latestTs) {
+        acc.latestTs = ts;
+        acc.latestPrincipal = principal;
+      }
       byAccount[snap.accountName] = acc;
     });
 
-    const results = Object.entries(byAccount).map(([account, { total, days }]) => {
-      const dayCount = days.size;
-      const annualized = dayCount > 0 ? (total / dayCount) * 365 : 0;
-      return { account, total, days: dayCount, annualized };
-    });
+    const results = Object.entries(byAccount).map(([account, a]) => ({
+      account,
+      total: a.total,
+      days: a.days.size,
+      principal: a.latestPrincipal,
+      // 年化報酬率（小數，例如 0.12 = 12%）；無本金資料時為 null
+      annualizedRate: a.rateDays > 0 ? (a.rateSum / a.rateDays) * 365 : null,
+    }));
 
-    return { results, totalSnapshots: snapshots.length };
+    // 整體年化報酬率：以本金加權平均
+    const weighted = results.filter((r) => r.annualizedRate !== null && r.principal > 0);
+    const principalSum = weighted.reduce((s, r) => s + r.principal, 0);
+    const overallRate =
+      principalSum > 0
+        ? weighted.reduce((s, r) => s + (r.annualizedRate as number) * r.principal, 0) / principalSum
+        : null;
+    const totalInterest = results.reduce((s, r) => s + r.total, 0);
+
+    return { results, totalSnapshots: snapshots.length, totalInterest, overallRate };
   };
 
   const annualizedData = calculateAnnualizedReturn();
@@ -163,7 +195,13 @@ export default function Home() {
                           {item.days} 天
                         </Badge>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <p className="text-xs text-gray-400">本金</p>
+                          <p className="text-sm font-mono font-semibold text-blue-400">
+                            {item.principal > 0 ? `${item.principal.toFixed(2)} USD` : "—"}
+                          </p>
+                        </div>
                         <div>
                           <p className="text-xs text-gray-400">累計利息</p>
                           <p className="text-sm font-mono font-semibold text-green-400">
@@ -171,9 +209,9 @@ export default function Home() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-400">年化報酬</p>
+                          <p className="text-xs text-gray-400">年化報酬率</p>
                           <p className="text-sm font-mono font-semibold text-yellow-400">
-                            +{item.annualized.toFixed(8)} USD/年
+                            {item.annualizedRate !== null ? `${(item.annualizedRate * 100).toFixed(2)}%` : "—"}
                           </p>
                         </div>
                       </div>
@@ -183,11 +221,21 @@ export default function Home() {
 
                 <Separator className="bg-gray-700" />
 
-                <div className="p-3 rounded-lg bg-gradient-to-r from-green-500/10 to-yellow-500/10 border border-green-500/20">
-                  <p className="text-xs text-gray-400 mb-1">總計年化報酬</p>
-                  <p className="text-lg font-mono font-bold text-green-400">
-                    +{annualizedData.results.reduce((sum, r) => sum + r.annualized, 0).toFixed(8)} USD/年
-                  </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-gradient-to-r from-green-500/10 to-green-500/5 border border-green-500/20">
+                    <p className="text-xs text-gray-400 mb-1">總累計利息</p>
+                    <p className="text-lg font-mono font-bold text-green-400">
+                      +{annualizedData.totalInterest.toFixed(8)} USD
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-gradient-to-r from-yellow-500/10 to-yellow-500/5 border border-yellow-500/20">
+                    <p className="text-xs text-gray-400 mb-1">整體年化報酬率</p>
+                    <p className="text-lg font-mono font-bold text-yellow-400">
+                      {annualizedData.overallRate !== null
+                        ? `${(annualizedData.overallRate * 100).toFixed(2)}%`
+                        : "—"}
+                    </p>
+                  </div>
                 </div>
               </>
             ) : (

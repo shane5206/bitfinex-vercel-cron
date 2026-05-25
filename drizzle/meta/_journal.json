@@ -15,6 +15,13 @@
       "when": 1779532922153,
       "tag": "0001_tiresome_famine",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1779725892393,
+      "tag": "0002_majestic_wraith",
+      "breakpoints": true
     }
   ]
 }

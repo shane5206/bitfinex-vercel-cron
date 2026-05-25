@@ -164,7 +164,8 @@ export async function insertInterestSnapshot(
   snapshotDate: Date,
   accountName: string,
   interestUsd: string,
-  interestCount: number
+  interestCount: number,
+  principalUsd: string | null
 ) {
   const db = await getDb();
   if (!db) {
@@ -193,7 +194,7 @@ export async function insertInterestSnapshot(
     if (existing.length > 0) {
       await db
         .update(interestSnapshots)
-        .set({ snapshotDate, interestUsd, interestCount })
+        .set({ snapshotDate, interestUsd, interestCount, principalUsd })
         .where(eq(interestSnapshots.id, existing[0].id));
     } else {
       await db.insert(interestSnapshots).values({
@@ -201,6 +202,7 @@ export async function insertInterestSnapshot(
         accountName,
         interestUsd,
         interestCount,
+        principalUsd,
       });
     }
   } catch (error) {

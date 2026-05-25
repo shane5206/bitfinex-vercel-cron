@@ -67,7 +67,8 @@ export async function runDailyReport(): Promise<ReportResult> {
           executedAt,
           r.accountName,
           r.totalInterest.toString(),
-          r.entries
+          r.entries,
+          r.principal && r.principal > 0 ? r.principal.toString() : null
         )
       )
   );

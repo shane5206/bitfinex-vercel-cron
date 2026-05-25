@@ -59,9 +59,62 @@ async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   }
   return { accountName, totalInterest: 0, currency: "USD", entries: 0, error: "Max retries exceeded" };
 }
+async function fetchFundingBalance(apiKey, apiSecret, retries = 3) {
+  const apiPath = "v2/auth/r/wallets";
+  const bodyStr = "{}";
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = (Date.now() * 1e3).toString();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json"
+    };
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers,
+        body: bodyStr
+      });
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error(`Unexpected response: ${JSON.stringify(data)}`);
+      }
+      if (data[0] === "error") {
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1e3);
+          continue;
+        }
+        return 0;
+      }
+      let principal = 0;
+      for (const wallet of data) {
+        if (Array.isArray(wallet) && wallet[0] === "funding" && typeof wallet[2] === "number") {
+          principal += wallet[2];
+        }
+      }
+      return principal;
+    } catch {
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1e3);
+      } else {
+        return 0;
+      }
+    }
+  }
+  return 0;
+}
 async function fetchAllAccountsInterest(accounts) {
   return Promise.all(
-    accounts.map((acc) => fetchDailyInterest(acc.key, acc.secret, acc.name))
+    accounts.map(async (acc) => {
+      const [interest, principal] = await Promise.all([
+        fetchDailyInterest(acc.key, acc.secret, acc.name),
+        fetchFundingBalance(acc.key, acc.secret)
+      ]);
+      return { ...interest, principal };
+    })
   );
 }
 function sleep(ms) {
@@ -114,7 +167,7 @@ function formatInterestReport(results, executedAt) {
   message += `<i>\u6210\u529F\u67E5\u8A62 ${successCount}/${results.length} \u500B\u5E33\u6236</i>`;
   return message;
 }
-async function sendTelegramMessage(botToken, chatId, text, retries = 3) {
+async function sendTelegramMessage(botToken, chatId, text2, retries = 3) {
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -123,7 +176,7 @@ async function sendTelegramMessage(botToken, chatId, text, retries = 3) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text,
+          text: text2,
           parse_mode: "HTML"
         })
       });
@@ -150,6 +203,104 @@ async function sendTelegramMessage(botToken, chatId, text, retries = 3) {
 }
 function sleep2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// server/db.ts
+import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/mysql2";
+
+// drizzle/schema.ts
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+var users = mysqlTable("users", {
+  /**
+   * Surrogate primary key. Auto-incremented numeric value managed by the database.
+   * Use this for relations between tables.
+   */
+  id: int("id").autoincrement().primaryKey(),
+  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull()
+});
+var interestSnapshots = mysqlTable("interestSnapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  /** 快照日期 (UTC) */
+  snapshotDate: timestamp("snapshotDate").notNull(),
+  /** 帳戶名稱 (e.g., Account 1, Account 2) */
+  accountName: varchar("accountName", { length: 64 }).notNull(),
+  /** 該帳戶該日期的利息總額 (USD) */
+  interestUsd: text("interestUsd").notNull(),
+  /** 該帳戶該日期的利息筆數 */
+  interestCount: int("interestCount").notNull(),
+  /** 該帳戶該日期的 funding 錢包本金 (USD)，用於計算年化報酬率 */
+  principalUsd: text("principalUsd"),
+  /** 記錄建立時間 */
+  createdAt: timestamp("createdAt").defaultNow().notNull()
+});
+
+// server/_core/env.ts
+var ENV = {
+  appId: process.env.VITE_APP_ID ?? "",
+  cookieSecret: process.env.JWT_SECRET ?? "",
+  databaseUrl: process.env.DATABASE_URL ?? "",
+  oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
+  ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
+  isProduction: process.env.NODE_ENV === "production",
+  forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
+  forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? ""
+};
+
+// server/db.ts
+import { gte, lt, desc, and } from "drizzle-orm";
+var _db = null;
+async function getDb() {
+  if (!_db && process.env.DATABASE_URL) {
+    try {
+      _db = drizzle(process.env.DATABASE_URL);
+    } catch (error) {
+      console.warn("[Database] Failed to connect:", error);
+      _db = null;
+    }
+  }
+  return _db;
+}
+async function insertInterestSnapshot(snapshotDate, accountName, interestUsd, interestCount, principalUsd) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot insert interest snapshot: database not available");
+    return;
+  }
+  const startOfDay = new Date(
+    Date.UTC(snapshotDate.getUTCFullYear(), snapshotDate.getUTCMonth(), snapshotDate.getUTCDate())
+  );
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1e3);
+  try {
+    const existing = await db.select({ id: interestSnapshots.id }).from(interestSnapshots).where(
+      and(
+        eq(interestSnapshots.accountName, accountName),
+        gte(interestSnapshots.snapshotDate, startOfDay),
+        lt(interestSnapshots.snapshotDate, endOfDay)
+      )
+    ).limit(1);
+    if (existing.length > 0) {
+      await db.update(interestSnapshots).set({ snapshotDate, interestUsd, interestCount, principalUsd }).where(eq(interestSnapshots.id, existing[0].id));
+    } else {
+      await db.insert(interestSnapshots).values({
+        snapshotDate,
+        accountName,
+        interestUsd,
+        interestCount,
+        principalUsd
+      });
+    }
+  } catch (error) {
+    console.error("[Database] Failed to insert interest snapshot:", error);
+  }
 }
 
 // server/cron/daily-report.ts
@@ -190,6 +341,17 @@ async function runDailyReport() {
     }
   }
   const executedAt = /* @__PURE__ */ new Date();
+  await Promise.all(
+    results.filter((r) => !r.error).map(
+      (r) => insertInterestSnapshot(
+        executedAt,
+        r.accountName,
+        r.totalInterest.toString(),
+        r.entries,
+        r.principal && r.principal > 0 ? r.principal.toString() : null
+      )
+    )
+  );
   const message = formatInterestReport(results, executedAt);
   console.log("[CronJob] \u767C\u9001 Telegram \u901A\u77E5...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);

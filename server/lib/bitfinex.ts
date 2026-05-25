@@ -3,6 +3,8 @@ import crypto from "crypto";
 export interface InterestResult {
   accountName: string;
   totalInterest: number;
+  /** funding 錢包本金 (USD)，查詢失敗或無資料時為 0 */
+  principal?: number;
   currency: string;
   entries: number;
   error?: string;
@@ -89,7 +91,71 @@ export async function fetchDailyInterest(
 }
 
 /**
- * 並行查詢兩個帳戶的利息
+ * 查詢指定帳戶的 funding（放貸）錢包餘額，作為計算年化報酬率的本金。
+ * 加總所有 funding 錢包餘額（視為 USD 等值），查詢失敗回傳 0。
+ * wallet 格式: [WALLET_TYPE, CURRENCY, BALANCE, UNSETTLED_INTEREST, AVAILABLE_BALANCE, ...]
+ */
+export async function fetchFundingBalance(
+  apiKey: string,
+  apiSecret: string,
+  retries = 3
+): Promise<number> {
+  const apiPath = "v2/auth/r/wallets";
+  const bodyStr = "{}";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = (Date.now() * 1000).toString();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json",
+    };
+
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers,
+        body: bodyStr,
+      });
+
+      const data = (await res.json()) as unknown[];
+
+      if (!Array.isArray(data)) {
+        throw new Error(`Unexpected response: ${JSON.stringify(data)}`);
+      }
+
+      if (data[0] === "error") {
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1000);
+          continue;
+        }
+        return 0;
+      }
+
+      let principal = 0;
+      for (const wallet of data) {
+        if (Array.isArray(wallet) && wallet[0] === "funding" && typeof wallet[2] === "number") {
+          principal += wallet[2];
+        }
+      }
+      return principal;
+    } catch {
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1000);
+      } else {
+        return 0;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * 並行查詢多個帳戶的利息與 funding 本金
  */
 export async function fetchAllAccountsInterest(accounts: {
   key: string;
@@ -97,7 +163,13 @@ export async function fetchAllAccountsInterest(accounts: {
   name: string;
 }[]): Promise<InterestResult[]> {
   return Promise.all(
-    accounts.map((acc) => fetchDailyInterest(acc.key, acc.secret, acc.name))
+    accounts.map(async (acc) => {
+      const [interest, principal] = await Promise.all([
+        fetchDailyInterest(acc.key, acc.secret, acc.name),
+        fetchFundingBalance(acc.key, acc.secret),
+      ]);
+      return { ...interest, principal };
+    })
   );
 }
 
