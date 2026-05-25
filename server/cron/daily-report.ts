@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { fetchAllAccountsInterest } from "../lib/bitfinex";
 import { formatInterestReport, sendTelegramMessage } from "../lib/telegram";
+import { insertInterestSnapshot } from "../db";
 
 export interface ReportResult {
   success: boolean;
@@ -56,6 +57,21 @@ export async function runDailyReport(): Promise<ReportResult> {
   }
 
   const executedAt = new Date();
+
+  // 持久化每日利息快照，供「近一年利息分析」使用（僅記錄查詢成功的帳戶）
+  await Promise.all(
+    results
+      .filter((r) => !r.error)
+      .map((r) =>
+        insertInterestSnapshot(
+          executedAt,
+          r.accountName,
+          r.totalInterest.toString(),
+          r.entries
+        )
+      )
+  );
+
   const message = formatInterestReport(results, executedAt);
   console.log("[CronJob] 發送 Telegram 通知...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);

@@ -95,7 +95,7 @@ export async function getUserByOpenId(openId: string) {
 // ===== Interest Snapshot Queries =====
 
 import { interestSnapshots } from "../drizzle/schema";
-import { gte, desc } from "drizzle-orm";
+import { gte, desc, and } from "drizzle-orm";
 
 /**
  * 查詢過去 N 天的利息快照
@@ -144,8 +144,10 @@ export async function queryInterestSnapshotsByAccount(
       .select()
       .from(interestSnapshots)
       .where(
-        gte(interestSnapshots.snapshotDate, startDate) &&
+        and(
+          gte(interestSnapshots.snapshotDate, startDate),
           eq(interestSnapshots.accountName, accountName)
+        )
       )
       .orderBy(desc(interestSnapshots.snapshotDate));
   } catch (error) {
