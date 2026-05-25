@@ -39,28 +39,28 @@ export default function Home() {
 
   const totalInterest = lastResult?.results?.reduce((sum, r) => sum + (r.interest ?? 0), 0) ?? 0;
 
-  // 計算年化報酬率
+  // 計算年化報酬率：每筆快照代表當日 24 小時利息，故以「涵蓋的天數」為基準
   const calculateAnnualizedReturn = () => {
     if (!snapshots || snapshots.length === 0) return null;
 
-    // 計算每個帳戶的總利息
-    const accountTotals: Record<string, number> = {};
+    // 依帳戶彙總累計利息，並以日曆日去重計算涵蓋天數
+    const byAccount: Record<string, { total: number; days: Set<string> }> = {};
     snapshots.forEach((snap) => {
       const interest = parseFloat(snap.interestUsd);
-      accountTotals[snap.accountName] = (accountTotals[snap.accountName] || 0) + interest;
+      const dayKey = new Date(snap.snapshotDate).toISOString().slice(0, 10);
+      const acc = byAccount[snap.accountName] ?? { total: 0, days: new Set<string>() };
+      acc.total += interest;
+      acc.days.add(dayKey);
+      byAccount[snap.accountName] = acc;
     });
 
-    // 計算天數
-    const dates = snapshots.map((s) => new Date(s.snapshotDate).getTime());
-    const days = dates.length > 0 ? (Math.max(...dates) - Math.min(...dates)) / (1000 * 60 * 60 * 24) : 0;
-
-    // 計算年化報酬
-    const results = Object.entries(accountTotals).map(([account, total]) => {
-      const annualized = days > 0 ? (total / days) * 365 : 0;
-      return { account, total, annualized };
+    const results = Object.entries(byAccount).map(([account, { total, days }]) => {
+      const dayCount = days.size;
+      const annualized = dayCount > 0 ? (total / dayCount) * 365 : 0;
+      return { account, total, days: dayCount, annualized };
     });
 
-    return { results, days, totalSnapshots: snapshots.length };
+    return { results, totalSnapshots: snapshots.length };
   };
 
   const annualizedData = calculateAnnualizedReturn();
@@ -160,7 +160,7 @@ export default function Home() {
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-white">{item.account}</p>
                         <Badge variant="outline" className="border-cyan-500/30 text-cyan-400 bg-cyan-500/10 text-xs">
-                          {annualizedData.days.toFixed(0)} 天
+                          {item.days} 天
                         </Badge>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
