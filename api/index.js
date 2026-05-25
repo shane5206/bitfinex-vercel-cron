@@ -35,6 +35,19 @@ var users = mysqlTable("users", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull()
 });
+var interestSnapshots = mysqlTable("interestSnapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  /** 快照日期 (UTC) */
+  snapshotDate: timestamp("snapshotDate").notNull(),
+  /** 帳戶名稱 (e.g., Account 1, Account 2) */
+  accountName: varchar("accountName", { length: 64 }).notNull(),
+  /** 該帳戶該日期的利息總額 (USD) */
+  interestUsd: text("interestUsd").notNull(),
+  /** 該帳戶該日期的利息筆數 */
+  interestCount: int("interestCount").notNull(),
+  /** 記錄建立時間 */
+  createdAt: timestamp("createdAt").defaultNow().notNull()
+});
 
 // server/_core/env.ts
 var ENV = {
@@ -49,6 +62,7 @@ var ENV = {
 };
 
 // server/db.ts
+import { gte, desc } from "drizzle-orm";
 var _db = null;
 async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
@@ -117,6 +131,38 @@ async function getUserByOpenId(openId) {
   }
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result.length > 0 ? result[0] : void 0;
+}
+async function queryInterestSnapshots(days = 365) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot query interest snapshots: database not available");
+    return [];
+  }
+  const startDate = /* @__PURE__ */ new Date();
+  startDate.setDate(startDate.getDate() - days);
+  try {
+    return await db.select().from(interestSnapshots).where(gte(interestSnapshots.snapshotDate, startDate)).orderBy(desc(interestSnapshots.snapshotDate));
+  } catch (error) {
+    console.error("[Database] Failed to query interest snapshots:", error);
+    return [];
+  }
+}
+async function queryInterestSnapshotsByAccount(accountName, days = 365) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot query interest snapshots: database not available");
+    return [];
+  }
+  const startDate = /* @__PURE__ */ new Date();
+  startDate.setDate(startDate.getDate() - days);
+  try {
+    return await db.select().from(interestSnapshots).where(
+      gte(interestSnapshots.snapshotDate, startDate) && eq(interestSnapshots.accountName, accountName)
+    ).orderBy(desc(interestSnapshots.snapshotDate));
+  } catch (error) {
+    console.error("[Database] Failed to query interest snapshots by account:", error);
+    return [];
+  }
 }
 
 // server/_core/cookies.ts
@@ -771,8 +817,8 @@ async function dailyReportHandler(req, res) {
 }
 
 // server/routers.ts
+import { z as z2 } from "zod";
 var appRouter = router({
-  // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
@@ -790,6 +836,25 @@ var appRouter = router({
      */
     triggerReport: publicProcedure.mutation(async () => {
       return await runDailyReport();
+    })
+  }),
+  interest: router({
+    /**
+     * 查詢過去 N 天的利息快照
+     */
+    getSnapshots: publicProcedure.input(z2.object({ days: z2.number().int().positive().default(365) })).query(async ({ input }) => {
+      return await queryInterestSnapshots(input.days);
+    }),
+    /**
+     * 查詢指定帳戶過去 N 天的利息快照
+     */
+    getSnapshotsByAccount: publicProcedure.input(
+      z2.object({
+        accountName: z2.string(),
+        days: z2.number().int().positive().default(365)
+      })
+    ).query(async ({ input }) => {
+      return await queryInterestSnapshotsByAccount(input.accountName, input.days);
     })
   })
 });

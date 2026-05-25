@@ -3,12 +3,13 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { runDailyReport } from "./cron/daily-report";
+import { queryInterestSnapshots, queryInterestSnapshotsByAccount } from "./db";
+import { z } from "zod";
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -25,6 +26,31 @@ export const appRouter = router({
     triggerReport: publicProcedure.mutation(async () => {
       return await runDailyReport();
     }),
+  }),
+
+  interest: router({
+    /**
+     * 查詢過去 N 天的利息快照
+     */
+    getSnapshots: publicProcedure
+      .input(z.object({ days: z.number().int().positive().default(365) }))
+      .query(async ({ input }) => {
+        return await queryInterestSnapshots(input.days);
+      }),
+
+    /**
+     * 查詢指定帳戶過去 N 天的利息快照
+     */
+    getSnapshotsByAccount: publicProcedure
+      .input(
+        z.object({
+          accountName: z.string(),
+          days: z.number().int().positive().default(365),
+        })
+      )
+      .query(async ({ input }) => {
+        return await queryInterestSnapshotsByAccount(input.accountName, input.days);
+      }),
   }),
 });
 

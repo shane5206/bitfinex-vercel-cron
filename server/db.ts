@@ -90,3 +90,93 @@ export async function getUserByOpenId(openId: string) {
 }
 
 // TODO: add feature queries here as your schema grows.
+
+
+// ===== Interest Snapshot Queries =====
+
+import { interestSnapshots } from "../drizzle/schema";
+import { gte, desc } from "drizzle-orm";
+
+/**
+ * 查詢過去 N 天的利息快照
+ * @param days 天數（預設 365 天 = 1 年）
+ */
+export async function queryInterestSnapshots(days: number = 365) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot query interest snapshots: database not available");
+    return [];
+  }
+
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  try {
+    return await db
+      .select()
+      .from(interestSnapshots)
+      .where(gte(interestSnapshots.snapshotDate, startDate))
+      .orderBy(desc(interestSnapshots.snapshotDate));
+  } catch (error) {
+    console.error("[Database] Failed to query interest snapshots:", error);
+    return [];
+  }
+}
+
+/**
+ * 查詢指定帳戶過去 N 天的利息快照
+ */
+export async function queryInterestSnapshotsByAccount(
+  accountName: string,
+  days: number = 365
+) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot query interest snapshots: database not available");
+    return [];
+  }
+
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  try {
+    return await db
+      .select()
+      .from(interestSnapshots)
+      .where(
+        gte(interestSnapshots.snapshotDate, startDate) &&
+          eq(interestSnapshots.accountName, accountName)
+      )
+      .orderBy(desc(interestSnapshots.snapshotDate));
+  } catch (error) {
+    console.error("[Database] Failed to query interest snapshots by account:", error);
+    return [];
+  }
+}
+
+/**
+ * 新增利息快照
+ */
+export async function insertInterestSnapshot(
+  snapshotDate: Date,
+  accountName: string,
+  interestUsd: string,
+  interestCount: number
+) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot insert interest snapshot: database not available");
+    return;
+  }
+
+  try {
+    await db.insert(interestSnapshots).values({
+      snapshotDate,
+      accountName,
+      interestUsd,
+      interestCount,
+    });
+  } catch (error) {
+    console.error("[Database] Failed to insert interest snapshot:", error);
+  }
+}

@@ -45,3 +45,14 @@
 ## 緊急修正 v7
 
 - [x] 診斷並修正 Vercel Cron Job 每天中午 12 點未自動執行：新增獨立的 api/cron/daily-report.js Vercel Function，讓 Cron Job 直接呼叫，不需經過 rewrites 轉發
+
+## 新功能：利息報酬分析
+
+- [x] 檢查資料庫中是否已存儲歷史利息記錄（無，需新增表）
+- [x] 新增 interestSnapshots 資料表存儲每日利息快照
+- [x] 新增後端 API 端點 interest.getSnapshots 和 interest.getSnapshotsByAccount
+- [x] 前端頁面新增「近一年利息分析」區塊，顯示：
+  - 各帳戶的累計利息
+  - 年化報酬率計算
+  - 記錄天數統計
+- [ ] 推送至 GitHub 並部署到 Vercel

@@ -25,4 +25,23 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/**
+ * 每日利息快照表
+ * 存儲每日自動執行 Cron Job 時的利息數據
+ */
+export const interestSnapshots = mysqlTable("interestSnapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  /** 快照日期 (UTC) */
+  snapshotDate: timestamp("snapshotDate").notNull(),
+  /** 帳戶名稱 (e.g., Account 1, Account 2) */
+  accountName: varchar("accountName", { length: 64 }).notNull(),
+  /** 該帳戶該日期的利息總額 (USD) */
+  interestUsd: text("interestUsd").notNull(),
+  /** 該帳戶該日期的利息筆數 */
+  interestCount: int("interestCount").notNull(),
+  /** 記錄建立時間 */
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type InterestSnapshot = typeof interestSnapshots.$inferSelect;
+export type InsertInterestSnapshot = typeof interestSnapshots.$inferInsert;
