@@ -311,6 +311,13 @@ async function insertInterestSnapshot(snapshotDate, accountName, interestUsd, in
 }
 
 // server/cron/daily-report.ts
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} \u903E\u6642\uFF08${ms}ms\uFF09`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 async function runDailyReport() {
   const startTime = Date.now();
   console.log(`[CronJob] \u958B\u59CB\u57F7\u884C\u6BCF\u65E5\u5229\u606F\u5831\u544A - ${(/* @__PURE__ */ new Date()).toISOString()}`);
@@ -348,20 +355,28 @@ async function runDailyReport() {
     }
   }
   const executedAt = /* @__PURE__ */ new Date();
-  await Promise.all(
-    results.filter((r) => !r.error).map(
-      (r) => insertInterestSnapshot(
-        executedAt,
-        r.accountName,
-        r.totalInterest.toString(),
-        r.entries,
-        r.principal && r.principal > 0 ? r.principal.toString() : null
-      )
-    )
-  );
   const message = formatInterestReport(results, executedAt);
   console.log("[CronJob] \u767C\u9001 Telegram \u901A\u77E5...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);
+  try {
+    await withTimeout(
+      Promise.all(
+        results.filter((r) => !r.error).map(
+          (r) => insertInterestSnapshot(
+            executedAt,
+            r.accountName,
+            r.totalInterest.toString(),
+            r.entries,
+            r.principal && r.principal > 0 ? r.principal.toString() : null
+          )
+        )
+      ),
+      8e3,
+      "\u5229\u606F\u5FEB\u7167\u5BEB\u5165"
+    );
+  } catch (err) {
+    console.error("[CronJob] \u5229\u606F\u5FEB\u7167\u5BEB\u5165\u5931\u6557\u6216\u903E\u6642:", err);
+  }
   const elapsed = ((Date.now() - startTime) / 1e3).toFixed(2);
   const mappedResults = results.map((r) => ({
     account: r.accountName,

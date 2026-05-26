@@ -10,6 +10,15 @@ export interface ReportResult {
   error?: string;
 }
 
+// 為 Promise 加上逾時保護，避免緩慢的資料庫寫入拖住整個 serverless 執行
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} 逾時（${ms}ms）`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * 核心邏輯：執行每日利息報告並發送 Telegram
  * 可被 Vercel Cron HTTP handler 和 tRPC mutation 共用
@@ -58,24 +67,33 @@ export async function runDailyReport(): Promise<ReportResult> {
 
   const executedAt = new Date();
 
-  // 持久化每日利息快照，供「近一年利息分析」使用（僅記錄查詢成功的帳戶）
-  await Promise.all(
-    results
-      .filter((r) => !r.error)
-      .map((r) =>
-        insertInterestSnapshot(
-          executedAt,
-          r.accountName,
-          r.totalInterest.toString(),
-          r.entries,
-          r.principal && r.principal > 0 ? r.principal.toString() : null
-        )
-      )
-  );
-
+  // 先發送 Telegram 通知（主要功能），確保不被後續資料庫寫入阻擋或延誤
   const message = formatInterestReport(results, executedAt);
   console.log("[CronJob] 發送 Telegram 通知...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);
+
+  // 發送後再持久化每日利息快照（次要功能，盡力而為；失敗或逾時不影響通知）
+  try {
+    await withTimeout(
+      Promise.all(
+        results
+          .filter((r) => !r.error)
+          .map((r) =>
+            insertInterestSnapshot(
+              executedAt,
+              r.accountName,
+              r.totalInterest.toString(),
+              r.entries,
+              r.principal && r.principal > 0 ? r.principal.toString() : null
+            )
+          )
+      ),
+      8000,
+      "利息快照寫入"
+    );
+  } catch (err) {
+    console.error("[CronJob] 利息快照寫入失敗或逾時:", err);
+  }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
   const mappedResults = results.map((r) => ({
