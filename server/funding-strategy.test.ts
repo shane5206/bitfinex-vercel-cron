@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BITFINEX_MIN_FUNDING_OFFER,
   DEFAULT_LADDER,
   apyToDailyRate,
   dailyRateToApy,
@@ -18,7 +19,7 @@ const cfg: StrategyConfig = {
   basePeriodDays: 2,
   spikeApy: 25,
   spikePeriodDays: 30,
-  minOfferAmount: 50,
+  minOfferAmount: BITFINEX_MIN_FUNDING_OFFER,
   maxOffers: 5,
 };
 
@@ -125,32 +126,58 @@ describe("異常輸入時不得掛單", () => {
 
 describe("小額資金重新分配", () => {
   it("層級金額低於最小單位時應剔除並把資金分給其他層", () => {
-    // 120 依 30/40/30 分配會是 36/48/36，三層都低於 50
-    const offers = planOffers(120, REAL_FRR, cfg);
+    // 360 依 30/40/30 分配為 108/144/108，三層皆低於 150
+    const offers = planOffers(360, REAL_FRR, cfg);
 
     expect(offers).toHaveLength(2);
     for (const offer of offers) {
       expect(offer.amount).toBeGreaterThanOrEqual(cfg.minOfferAmount);
     }
-    expect(offers.reduce((s, o) => s + o.amount, 0)).toBeLessThanOrEqual(120);
+    expect(offers.reduce((s, o) => s + o.amount, 0)).toBeLessThanOrEqual(360);
   });
 
   it("資金只夠一筆時應全部集中成一筆，且掛在最容易成交的 FRR 價位", () => {
-    const offers = planOffers(60, REAL_FRR, cfg);
+    const offers = planOffers(180, REAL_FRR, cfg);
 
     expect(offers).toHaveLength(1);
-    expect(offers[0].amount).toBeCloseTo(60, 2);
+    expect(offers[0].amount).toBeCloseTo(180, 2);
     expect(offers[0].mult).toBe(1.0);
   });
 
   it("資金不足時應保留低倍數層、剔除高倍數層", () => {
-    // 使用者帳戶 1 的實際情境：可佈署僅 136.35，三層各約 40/54/40 皆不足 50
-    const offers = planOffers(136.35, REAL_FRR, cfg);
+    const offers = planOffers(360, REAL_FRR, cfg);
 
-    expect(offers).toHaveLength(2);
     // 應留下 1.0 與 1.3 倍，而不是把最容易成交的 FRR 層丟掉
     expect(offers.map((o) => o.mult)).toEqual([1.0, 1.3]);
     expect(offers[0].rate).toBeCloseTo(REAL_FRR, 8);
+  });
+});
+
+describe("Bitfinex 最低單筆金額 150", () => {
+  it("預設值應為 150", () => {
+    expect(BITFINEX_MIN_FUNDING_OFFER).toBe(150);
+  });
+
+  it("可佈署資金低於 150 時不得掛任何單", () => {
+    // 使用者帳戶 1 的實際情境：閒置僅 136.35
+    expect(planOffers(136.35, REAL_FRR, cfg)).toEqual([]);
+    // 帳戶 2：29.46
+    expect(planOffers(29.46, REAL_FRR, cfg)).toEqual([]);
+  });
+
+  it("剛好達到 150 時應掛出一筆", () => {
+    const offers = planOffers(150, REAL_FRR, cfg);
+
+    expect(offers).toHaveLength(1);
+    expect(offers[0].amount).toBeCloseTo(150, 2);
+  });
+
+  it("每一筆掛單金額都不得低於最低限制", () => {
+    for (const deployable of [150, 300, 451, 1234.56, REAL_DEPLOYABLE]) {
+      for (const offer of planOffers(deployable, REAL_FRR, cfg)) {
+        expect(offer.amount).toBeGreaterThanOrEqual(BITFINEX_MIN_FUNDING_OFFER);
+      }
+    }
   });
 });
 

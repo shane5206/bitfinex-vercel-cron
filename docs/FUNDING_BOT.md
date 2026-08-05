@@ -82,7 +82,7 @@
 | `FUNDING_BOT_PERIOD_DAYS` | `2` | 平時出借天期 |
 | `FUNDING_BOT_SPIKE_APY` | `25` | FRR 年化超過此值視為 spike |
 | `FUNDING_BOT_SPIKE_PERIOD` | `30` | spike 時改用的天期（鎖住高利） |
-| `FUNDING_BOT_MIN_OFFER` | `50` | 單筆最小金額，被拒單時調高 |
+| `FUNDING_BOT_MIN_OFFER` | `150` | 單筆最小金額。Bitfinex 規定單筆放貸最低 150 USD 等值，低於此值會被拒單，不建議調低 |
 | `FUNDING_BOT_MAX_OFFERS` | `5` | 一次最多掛幾筆 |
 | `FUNDING_BOT_NOTIFY` | `changes` | `changes` / `always` / `never` |
 
@@ -110,6 +110,15 @@ Vercel Hobby 的內建 cron 一天只會觸發一次，所以改用外部服務�
    `frrApy` 與 App 顯示的 FRR 相符、`deployable` 等於該帳戶的閒置資金。
 3. 確認無誤後把 `FUNDING_BOT_DRY_RUN` 改成 `false`。
 4. 前幾天用 `FUNDING_BOT_NOTIFY=always` 觀察每次動作，穩定後改回 `changes`。
+
+## 為什麼有時候完全不掛單？
+
+Bitfinex 規定**單筆放貸最低 150 USD 等值**，因此可佈署資金低於 150 時機器人不會產生任何報價，
+回傳會顯示 `可佈署資金不足或 FRR 異常，未產生報價`。這是正常行為，不是錯誤。
+
+另外要注意：**已借出的資金（credits）在到期前無法調整**，機器人只能處理閒置資金與未成交掛單。
+若現有放貸單開著**自動續期（auto-renew）**，到期後會自動以 FRR 重新借出，
+資金永遠不會回到閒置狀態，機器人也就永遠接手不到——想讓機器人接管請先關閉自動續期。
 
 ## 已知限制
 

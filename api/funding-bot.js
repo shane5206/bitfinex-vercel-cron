@@ -2,6 +2,7 @@
 import "dotenv/config";
 
 // server/lib/funding-strategy.ts
+var BITFINEX_MIN_FUNDING_OFFER = 150;
 var DEFAULT_LADDER = [
   { pct: 30, mult: 1 },
   { pct: 40, mult: 1.3 },
@@ -307,7 +308,7 @@ function loadStrategyConfig() {
     basePeriodDays: Math.round(envNum("FUNDING_BOT_PERIOD_DAYS", 2)),
     spikeApy: envNum("FUNDING_BOT_SPIKE_APY", 25),
     spikePeriodDays: Math.round(envNum("FUNDING_BOT_SPIKE_PERIOD", 30)),
-    minOfferAmount: envNum("FUNDING_BOT_MIN_OFFER", 50),
+    minOfferAmount: envNum("FUNDING_BOT_MIN_OFFER", BITFINEX_MIN_FUNDING_OFFER),
     maxOffers: Math.round(envNum("FUNDING_BOT_MAX_OFFERS", 5))
   };
 }

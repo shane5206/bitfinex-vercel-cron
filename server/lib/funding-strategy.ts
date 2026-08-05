@@ -50,6 +50,13 @@ export interface ExistingOffer {
   period: number;
 }
 
+/**
+ * Bitfinex 單筆放貸的最低金額：150 USD 或等值。
+ * 低於此值送出會被 API 拒絕。
+ * 來源：https://support.bitfinex.com/hc/en-us/articles/213918949-What-is-the-minimum-offer-for-Funding
+ */
+export const BITFINEX_MIN_FUNDING_OFFER = 150;
+
 /** 平衡型預設 ladder：30% 貼著 FRR 保成交，其餘往上要溢價 */
 export const DEFAULT_LADDER: LadderTier[] = [
   { pct: 30, mult: 1.0 },
