@@ -135,11 +135,22 @@ describe("小額資金重新分配", () => {
     expect(offers.reduce((s, o) => s + o.amount, 0)).toBeLessThanOrEqual(120);
   });
 
-  it("資金只夠一筆時應全部集中成一筆", () => {
+  it("資金只夠一筆時應全部集中成一筆，且掛在最容易成交的 FRR 價位", () => {
     const offers = planOffers(60, REAL_FRR, cfg);
 
     expect(offers).toHaveLength(1);
     expect(offers[0].amount).toBeCloseTo(60, 2);
+    expect(offers[0].mult).toBe(1.0);
+  });
+
+  it("資金不足時應保留低倍數層、剔除高倍數層", () => {
+    // 使用者帳戶 1 的實際情境：可佈署僅 136.35，三層各約 40/54/40 皆不足 50
+    const offers = planOffers(136.35, REAL_FRR, cfg);
+
+    expect(offers).toHaveLength(2);
+    // 應留下 1.0 與 1.3 倍，而不是把最容易成交的 FRR 層丟掉
+    expect(offers.map((o) => o.mult)).toEqual([1.0, 1.3]);
+    expect(offers[0].rate).toBeCloseTo(REAL_FRR, 8);
   });
 });
 

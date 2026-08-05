@@ -54,12 +54,12 @@ function planOffers(deployable, frrDaily, cfg) {
   while (tiers.length > 1) {
     const weight2 = tiers.reduce((sum, t) => sum + t.pct, 0);
     const amounts = tiers.map((t) => deployable * t.pct / weight2);
-    let minIdx = 0;
-    for (let i = 1; i < amounts.length; i++) {
-      if (amounts[i] < amounts[minIdx]) minIdx = i;
+    if (Math.min(...amounts) >= cfg.minOfferAmount) break;
+    let dropIdx = 0;
+    for (let i = 1; i < tiers.length; i++) {
+      if (tiers[i].mult > tiers[dropIdx].mult) dropIdx = i;
     }
-    if (amounts[minIdx] >= cfg.minOfferAmount) break;
-    tiers = tiers.filter((_, i) => i !== minIdx);
+    tiers = tiers.filter((_, i) => i !== dropIdx);
   }
   const weight = tiers.reduce((sum, t) => sum + t.pct, 0);
   return tiers.map((t) => ({
