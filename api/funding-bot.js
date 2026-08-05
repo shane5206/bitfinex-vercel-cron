@@ -261,6 +261,27 @@ function sleep2(ms) {
 }
 
 // server/cron/funding-bot.ts
+function loadAccounts(env = process.env) {
+  const ids = (env.FUNDING_BOT_ACCOUNTS ?? "1").split(",").map((s) => s.trim()).filter(Boolean);
+  const accounts = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  for (const id of ids) {
+    const key = env[`FUNDING_BOT_ACCOUNT${id}_KEY`] || (id === "1" ? env.FUNDING_BOT_API_KEY : void 0) || env[`BITFINEX_ACCOUNT${id}_KEY`] || "";
+    const secret = env[`FUNDING_BOT_ACCOUNT${id}_SECRET`] || (id === "1" ? env.FUNDING_BOT_API_SECRET : void 0) || env[`BITFINEX_ACCOUNT${id}_SECRET`] || "";
+    const name = env[`BITFINEX_ACCOUNT${id}_NAME`] || `\u5E33\u6236 ${id}`;
+    if (!key || !secret) {
+      console.warn(`[FundingBot] ${name} \u7F3A\u5C11 API \u91D1\u9470\uFF0C\u7565\u904E`);
+      continue;
+    }
+    if (seenKeys.has(key)) {
+      console.warn(`[FundingBot] ${name} \u7684\u91D1\u9470\u8207\u5176\u4ED6\u5E33\u6236\u91CD\u8907\uFF0C\u7565\u904E\u4EE5\u514D\u4F75\u767C\u64CD\u4F5C\u540C\u4E00\u628A key`);
+      continue;
+    }
+    seenKeys.add(key);
+    accounts.push({ name, key, secret });
+  }
+  return accounts;
+}
 function envNum(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
@@ -352,6 +373,21 @@ async function runForCurrency(apiKey, apiSecret, currencyInput, cfg, dryRun) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }
 }
+async function runForAccount(account, currencies, cfg, dryRun) {
+  const results = [];
+  for (const currency of currencies) {
+    const result = await runForCurrency(account.key, account.secret, currency, cfg, dryRun);
+    results.push(result);
+    if (result.error) {
+      console.error(`[FundingBot] ${account.name} / ${result.currency} \u5931\u6557: ${result.error}`);
+    } else {
+      console.log(
+        `[FundingBot] ${account.name} / ${result.currency}: FRR ${result.frrApy?.toFixed(2)}% APY, \u53EF\u4F48\u7F72 ${result.deployable?.toFixed(2)}, ${result.note ?? `\u64A4 ${result.cancelled} \u639B ${result.placed}`}`
+      );
+    }
+  }
+  return { account: account.name, currencies: results };
+}
 function formatReport(result) {
   let message = `\u{1F916} <b>Bitfinex \u653E\u8CB8\u6A5F\u5668\u4EBA</b>
 `;
@@ -359,7 +395,16 @@ function formatReport(result) {
 `;
   message += `
 `;
-  for (const c of result.currencies) {
+  for (const acc of result.accounts) {
+    message += `\u2501\u2501 <b>${acc.account}</b> \u2501\u2501
+`;
+    message += formatCurrencies(acc.currencies);
+  }
+  return message.trimEnd();
+}
+function formatCurrencies(currencies) {
+  let message = "";
+  for (const c of currencies) {
     message += `<b>${c.currency}</b>
 `;
     if (c.error) {
@@ -394,7 +439,7 @@ function formatReport(result) {
     message += `
 `;
   }
-  return message.trimEnd();
+  return message;
 }
 async function runFundingBot() {
   const startTime = Date.now();
@@ -402,42 +447,33 @@ async function runFundingBot() {
   const dryRun = envBool("FUNDING_BOT_DRY_RUN", true);
   if (!enabled) {
     console.log("[FundingBot] \u672A\u555F\u7528\uFF08\u8A2D\u5B9A FUNDING_BOT_ENABLED=true \u4EE5\u555F\u7528\uFF09");
-    return { success: true, enabled: false, dryRun, currencies: [] };
+    return { success: true, enabled: false, dryRun, accounts: [] };
   }
-  const apiKey = process.env.FUNDING_BOT_API_KEY ?? process.env.BITFINEX_ACCOUNT1_KEY ?? "";
-  const apiSecret = process.env.FUNDING_BOT_API_SECRET ?? process.env.BITFINEX_ACCOUNT1_SECRET ?? "";
-  if (!apiKey || !apiSecret) {
-    const error = "\u7F3A\u5C11 API \u91D1\u9470\uFF08FUNDING_BOT_API_KEY / FUNDING_BOT_API_SECRET\uFF09";
+  const accounts = loadAccounts();
+  if (accounts.length === 0) {
+    const error = "\u6C92\u6709\u53EF\u7528\u7684\u5E33\u6236\uFF1A\u8ACB\u8A2D\u5B9A FUNDING_BOT_ACCOUNT{N}_KEY / _SECRET";
     console.error(`[FundingBot] ${error}`);
-    return { success: false, enabled, dryRun, error, currencies: [] };
+    return { success: false, enabled, dryRun, error, accounts: [] };
   }
   const cfg = loadStrategyConfig();
   const currencies = (process.env.FUNDING_BOT_CURRENCIES ?? "USD").split(",").map((c) => c.trim()).filter(Boolean);
   console.log(
-    `[FundingBot] \u958B\u59CB\u57F7\u884C\uFF08dryRun=${dryRun}, \u5E63\u5225=${currencies.join(",")}\uFF09- ${(/* @__PURE__ */ new Date()).toISOString()}`
+    `[FundingBot] \u958B\u59CB\u57F7\u884C\uFF08dryRun=${dryRun}, \u5E33\u6236=${accounts.length}, \u5E63\u5225=${currencies.join(",")}\uFF09- ${(/* @__PURE__ */ new Date()).toISOString()}`
   );
-  const results = [];
-  for (const currency of currencies) {
-    const result2 = await runForCurrency(apiKey, apiSecret, currency, cfg, dryRun);
-    results.push(result2);
-    if (result2.error) {
-      console.error(`[FundingBot] ${result2.currency} \u5931\u6557: ${result2.error}`);
-    } else {
-      console.log(
-        `[FundingBot] ${result2.currency}: FRR ${result2.frrApy?.toFixed(2)}% APY, \u53EF\u4F48\u7F72 ${result2.deployable?.toFixed(2)}, ${result2.note ?? `\u64A4 ${result2.cancelled} \u639B ${result2.placed}`}`
-      );
-    }
-  }
+  const accountResults = await Promise.all(
+    accounts.map((account) => runForAccount(account, currencies, cfg, dryRun))
+  );
+  const flat = accountResults.flatMap((a) => a.currencies);
   const elapsed = `${((Date.now() - startTime) / 1e3).toFixed(2)}s`;
   const result = {
-    success: results.every((r) => !r.error),
+    success: flat.every((r) => !r.error),
     enabled,
     dryRun,
     elapsed,
-    currencies: results
+    accounts: accountResults
   };
   const notify = (process.env.FUNDING_BOT_NOTIFY ?? "changes").trim().toLowerCase();
-  const hasNews = results.some((r) => r.changed || r.error);
+  const hasNews = flat.some((r) => r.changed || r.error);
   const shouldNotify = notify === "always" || notify === "changes" && hasNews;
   if (shouldNotify) {
     const token = process.env.TELEGRAM_BOT_TOKEN ?? "";

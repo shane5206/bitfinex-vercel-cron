@@ -45,13 +45,73 @@ export interface FundingBotCurrencyResult {
   error?: string;
 }
 
+export interface FundingBotAccountResult {
+  account: string;
+  currencies: FundingBotCurrencyResult[];
+}
+
 export interface FundingBotResult {
   success: boolean;
   enabled: boolean;
   dryRun: boolean;
   elapsed?: string;
-  currencies: FundingBotCurrencyResult[];
+  accounts: FundingBotAccountResult[];
   error?: string;
+}
+
+/** 機器人要操作的其中一個 Bitfinex 帳戶 */
+export interface BotAccount {
+  name: string;
+  key: string;
+  secret: string;
+}
+
+/**
+ * 解析要操作哪些帳戶。金鑰查找順序（由專用到通用）：
+ *   1. FUNDING_BOT_ACCOUNT{N}_KEY／SECRET（建議：只開放貸權限的專用金鑰）
+ *   2. FUNDING_BOT_API_KEY／SECRET（僅限帳戶 1，向下相容單帳戶設定）
+ *   3. BITFINEX_ACCOUNT{N}_KEY／SECRET（沿用每日報告的金鑰，可能是唯讀）
+ *
+ * 傳入 env 便於測試；金鑰重複的帳戶會被略過，避免同一把 key 被並行操作。
+ */
+export function loadAccounts(
+  env: Record<string, string | undefined> = process.env
+): BotAccount[] {
+  const ids = (env.FUNDING_BOT_ACCOUNTS ?? "1")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const accounts: BotAccount[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const id of ids) {
+    const key =
+      env[`FUNDING_BOT_ACCOUNT${id}_KEY`] ||
+      (id === "1" ? env.FUNDING_BOT_API_KEY : undefined) ||
+      env[`BITFINEX_ACCOUNT${id}_KEY`] ||
+      "";
+    const secret =
+      env[`FUNDING_BOT_ACCOUNT${id}_SECRET`] ||
+      (id === "1" ? env.FUNDING_BOT_API_SECRET : undefined) ||
+      env[`BITFINEX_ACCOUNT${id}_SECRET`] ||
+      "";
+    const name = env[`BITFINEX_ACCOUNT${id}_NAME`] || `帳戶 ${id}`;
+
+    if (!key || !secret) {
+      console.warn(`[FundingBot] ${name} 缺少 API 金鑰，略過`);
+      continue;
+    }
+    if (seenKeys.has(key)) {
+      console.warn(`[FundingBot] ${name} 的金鑰與其他帳戶重複，略過以免併發操作同一把 key`);
+      continue;
+    }
+
+    seenKeys.add(key);
+    accounts.push({ name, key, secret });
+  }
+
+  return accounts;
 }
 
 function envNum(name: string, fallback: number): number {
@@ -173,12 +233,50 @@ async function runForCurrency(
   }
 }
 
+/** 處理單一帳戶：幣別之間必須序列執行，避免同一把 key 的 nonce 競爭 */
+async function runForAccount(
+  account: BotAccount,
+  currencies: string[],
+  cfg: StrategyConfig,
+  dryRun: boolean
+): Promise<FundingBotAccountResult> {
+  const results: FundingBotCurrencyResult[] = [];
+
+  for (const currency of currencies) {
+    const result = await runForCurrency(account.key, account.secret, currency, cfg, dryRun);
+    results.push(result);
+
+    if (result.error) {
+      console.error(`[FundingBot] ${account.name} / ${result.currency} 失敗: ${result.error}`);
+    } else {
+      console.log(
+        `[FundingBot] ${account.name} / ${result.currency}: FRR ${result.frrApy?.toFixed(2)}% APY, ` +
+          `可佈署 ${result.deployable?.toFixed(2)}, ` +
+          `${result.note ?? `撤 ${result.cancelled} 掛 ${result.placed}`}`
+      );
+    }
+  }
+
+  return { account: account.name, currencies: results };
+}
+
 function formatReport(result: FundingBotResult): string {
   let message = `🤖 <b>Bitfinex 放貸機器人</b>\n`;
   if (result.dryRun) message += `🧪 <i>dry-run 模式（未實際下單）</i>\n`;
   message += `\n`;
 
-  for (const c of result.currencies) {
+  for (const acc of result.accounts) {
+    message += `━━ <b>${acc.account}</b> ━━\n`;
+    message += formatCurrencies(acc.currencies);
+  }
+
+  return message.trimEnd();
+}
+
+function formatCurrencies(currencies: FundingBotCurrencyResult[]): string {
+  let message = "";
+
+  for (const c of currencies) {
     message += `<b>${c.currency}</b>\n`;
 
     if (c.error) {
@@ -209,7 +307,7 @@ function formatReport(result: FundingBotResult): string {
     message += `\n`;
   }
 
-  return message.trimEnd();
+  return message;
 }
 
 export async function runFundingBot(): Promise<FundingBotResult> {
@@ -219,17 +317,14 @@ export async function runFundingBot(): Promise<FundingBotResult> {
 
   if (!enabled) {
     console.log("[FundingBot] 未啟用（設定 FUNDING_BOT_ENABLED=true 以啟用）");
-    return { success: true, enabled: false, dryRun, currencies: [] };
+    return { success: true, enabled: false, dryRun, accounts: [] };
   }
 
-  const apiKey = process.env.FUNDING_BOT_API_KEY ?? process.env.BITFINEX_ACCOUNT1_KEY ?? "";
-  const apiSecret =
-    process.env.FUNDING_BOT_API_SECRET ?? process.env.BITFINEX_ACCOUNT1_SECRET ?? "";
-
-  if (!apiKey || !apiSecret) {
-    const error = "缺少 API 金鑰（FUNDING_BOT_API_KEY / FUNDING_BOT_API_SECRET）";
+  const accounts = loadAccounts();
+  if (accounts.length === 0) {
+    const error = "沒有可用的帳戶：請設定 FUNDING_BOT_ACCOUNT{N}_KEY / _SECRET";
     console.error(`[FundingBot] ${error}`);
-    return { success: false, enabled, dryRun, error, currencies: [] };
+    return { success: false, enabled, dryRun, error, accounts: [] };
   }
 
   const cfg = loadStrategyConfig();
@@ -239,36 +334,29 @@ export async function runFundingBot(): Promise<FundingBotResult> {
     .filter(Boolean);
 
   console.log(
-    `[FundingBot] 開始執行（dryRun=${dryRun}, 幣別=${currencies.join(",")}）- ${new Date().toISOString()}`
+    `[FundingBot] 開始執行（dryRun=${dryRun}, 帳戶=${accounts.length}, ` +
+      `幣別=${currencies.join(",")}）- ${new Date().toISOString()}`
   );
 
-  const results: FundingBotCurrencyResult[] = [];
-  for (const currency of currencies) {
-    const result = await runForCurrency(apiKey, apiSecret, currency, cfg, dryRun);
-    results.push(result);
+  // 不同帳戶使用不同 API key，Bitfinex 的 nonce 是各金鑰獨立驗證，
+  // 因此帳戶之間可安全並行；帳戶內部的幣別仍維持序列執行。
+  const accountResults = await Promise.all(
+    accounts.map((account) => runForAccount(account, currencies, cfg, dryRun))
+  );
 
-    if (result.error) {
-      console.error(`[FundingBot] ${result.currency} 失敗: ${result.error}`);
-    } else {
-      console.log(
-        `[FundingBot] ${result.currency}: FRR ${result.frrApy?.toFixed(2)}% APY, ` +
-          `可佈署 ${result.deployable?.toFixed(2)}, ${result.note ?? `撤 ${result.cancelled} 掛 ${result.placed}`}`
-      );
-    }
-  }
-
+  const flat = accountResults.flatMap((a) => a.currencies);
   const elapsed = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
   const result: FundingBotResult = {
-    success: results.every((r) => !r.error),
+    success: flat.every((r) => !r.error),
     enabled,
     dryRun,
     elapsed,
-    currencies: results,
+    accounts: accountResults,
   };
 
   // 通知策略：預設只在有變動或出錯時發送，避免每 15 分鐘洗版
   const notify = (process.env.FUNDING_BOT_NOTIFY ?? "changes").trim().toLowerCase();
-  const hasNews = results.some((r) => r.changed || r.error);
+  const hasNews = flat.some((r) => r.changed || r.error);
   const shouldNotify = notify === "always" || (notify === "changes" && hasNews);
 
   if (shouldNotify) {
