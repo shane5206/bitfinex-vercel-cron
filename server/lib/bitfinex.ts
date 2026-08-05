@@ -1,8 +1,81 @@
 import crypto from "crypto";
 
+// Bitfinex 要求同一 API key 的 nonce 嚴格遞增；用全域單調計數器避免同毫秒碰撞。
+// 必須全專案共用此計數器（放貸機器人也會呼叫），否則不同模組會產生重複 nonce。
+let lastNonce = 0;
+export function nextNonce(): string {
+  let nonce = Date.now() * 1000;
+  if (nonce <= lastNonce) {
+    nonce = lastNonce + 1;
+  }
+  lastNonce = nonce;
+  return nonce.toString();
+}
+
+/**
+ * 呼叫 Bitfinex 認證端點（POST）的共用函式，含簽名與重試。
+ *
+ * 注意：呼叫端必須「序列化」同一把 API key 的請求（依序 await，不可 Promise.all），
+ * 否則併發請求會讓 Bitfinex 回報 nonce: small。
+ */
+export async function bitfinexAuthRequest<T = unknown>(
+  apiKey: string,
+  apiSecret: string,
+  apiPath: string,
+  body: Record<string, unknown> = {},
+  retries = 3
+): Promise<T> {
+  const bodyStr = JSON.stringify(body);
+  let lastError = "Max retries exceeded";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signature = crypto
+      .createHmac("sha384", apiSecret)
+      .update(`/api/${apiPath}${nonce}${bodyStr}`)
+      .digest("hex");
+
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers: {
+          "bfx-nonce": nonce,
+          "bfx-apikey": apiKey,
+          "bfx-signature": signature,
+          "Content-Type": "application/json",
+        },
+        body: bodyStr,
+      });
+
+      const data = (await res.json()) as unknown;
+
+      // 錯誤回應格式：["error", CODE, "message"]
+      if (Array.isArray(data) && data[0] === "error") {
+        lastError = `API Error: ${data[2] ?? data[1]}`;
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1000);
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      return data as T;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1000);
+      }
+    }
+  }
+
+  throw new Error(lastError);
+}
+
 export interface InterestResult {
   accountName: string;
   totalInterest: number;
+  /** funding 錢包本金 (USD)，查詢失敗或無資料時為 0 */
+  principal?: number;
   currency: string;
   entries: number;
   error?: string;
@@ -20,23 +93,23 @@ export async function fetchDailyInterest(
 ): Promise<InterestResult> {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1000;
-  // 官方文件要求 nonce 為微秒（Date.now() * 1000）
-  const nonce = (now * 1000).toString();
   // apiPath 格式：v2/auth/r/ledgers/hist（不含前導 /）
   const apiPath = "v2/auth/r/ledgers/hist";
   const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  // 官方簽名格式：/api/ + apiPath + nonce + body
-  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
-  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
-
-  const headers = {
-    "bfx-nonce": nonce,
-    "bfx-apikey": apiKey,
-    "bfx-signature": signature,
-    "Content-Type": "application/json",
-  };
 
   for (let attempt = 1; attempt <= retries; attempt++) {
+    // 每次嘗試都用新的遞增 nonce，避免重試時 nonce 過小
+    const nonce = nextNonce();
+    // 官方簽名格式：/api/ + apiPath + nonce + body
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json",
+    };
+
     try {
       const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
@@ -89,15 +162,85 @@ export async function fetchDailyInterest(
 }
 
 /**
- * 並行查詢兩個帳戶的利息
+ * 查詢指定帳戶的 funding（放貸）錢包餘額，作為計算年化報酬率的本金。
+ * 加總所有 funding 錢包餘額（視為 USD 等值），查詢失敗回傳 0。
+ * wallet 格式: [WALLET_TYPE, CURRENCY, BALANCE, UNSETTLED_INTEREST, AVAILABLE_BALANCE, ...]
+ */
+export async function fetchFundingBalance(
+  apiKey: string,
+  apiSecret: string,
+  retries = 3
+): Promise<number> {
+  const apiPath = "v2/auth/r/wallets";
+  const bodyStr = "{}";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json",
+    };
+
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers,
+        body: bodyStr,
+      });
+
+      const data = (await res.json()) as unknown[];
+
+      if (!Array.isArray(data)) {
+        throw new Error(`Unexpected response: ${JSON.stringify(data)}`);
+      }
+
+      if (data[0] === "error") {
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1000);
+          continue;
+        }
+        return 0;
+      }
+
+      let principal = 0;
+      for (const wallet of data) {
+        if (Array.isArray(wallet) && wallet[0] === "funding" && typeof wallet[2] === "number") {
+          principal += wallet[2];
+        }
+      }
+      return principal;
+    } catch {
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1000);
+      } else {
+        return 0;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * 並行查詢多個帳戶的利息與 funding 本金
  */
 export async function fetchAllAccountsInterest(accounts: {
   key: string;
   secret: string;
   name: string;
 }[]): Promise<InterestResult[]> {
+  // 不同帳戶（不同 API key）可並行；但同一帳戶的兩個請求必須序列化，
+  // 否則同一 key 的並發請求會觸發 Bitfinex「nonce: small」錯誤。
   return Promise.all(
-    accounts.map((acc) => fetchDailyInterest(acc.key, acc.secret, acc.name))
+    accounts.map(async (acc) => {
+      const interest = await fetchDailyInterest(acc.key, acc.secret, acc.name);
+      const principal = await fetchFundingBalance(acc.key, acc.secret);
+      return { ...interest, principal };
+    })
   );
 }
 

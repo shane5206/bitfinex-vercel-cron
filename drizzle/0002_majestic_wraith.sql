@@ -1,0 +1,1 @@
+ALTER TABLE `interestSnapshots` ADD `principalUsd` text;

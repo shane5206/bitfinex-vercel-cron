@@ -45,6 +45,8 @@ var interestSnapshots = mysqlTable("interestSnapshots", {
   interestUsd: text("interestUsd").notNull(),
   /** 該帳戶該日期的利息筆數 */
   interestCount: int("interestCount").notNull(),
+  /** 該帳戶該日期的 funding 錢包本金 (USD)，用於計算年化報酬率 */
+  principalUsd: text("principalUsd"),
   /** 記錄建立時間 */
   createdAt: timestamp("createdAt").defaultNow().notNull()
 });
@@ -62,7 +64,7 @@ var ENV = {
 };
 
 // server/db.ts
-import { gte, desc } from "drizzle-orm";
+import { gte, lt, desc, and } from "drizzle-orm";
 var _db = null;
 async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
@@ -157,11 +159,47 @@ async function queryInterestSnapshotsByAccount(accountName, days = 365) {
   startDate.setDate(startDate.getDate() - days);
   try {
     return await db.select().from(interestSnapshots).where(
-      gte(interestSnapshots.snapshotDate, startDate) && eq(interestSnapshots.accountName, accountName)
+      and(
+        gte(interestSnapshots.snapshotDate, startDate),
+        eq(interestSnapshots.accountName, accountName)
+      )
     ).orderBy(desc(interestSnapshots.snapshotDate));
   } catch (error) {
     console.error("[Database] Failed to query interest snapshots by account:", error);
     return [];
+  }
+}
+async function insertInterestSnapshot(snapshotDate, accountName, interestUsd, interestCount, principalUsd) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot insert interest snapshot: database not available");
+    return;
+  }
+  const startOfDay = new Date(
+    Date.UTC(snapshotDate.getUTCFullYear(), snapshotDate.getUTCMonth(), snapshotDate.getUTCDate())
+  );
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1e3);
+  try {
+    const existing = await db.select({ id: interestSnapshots.id }).from(interestSnapshots).where(
+      and(
+        eq(interestSnapshots.accountName, accountName),
+        gte(interestSnapshots.snapshotDate, startOfDay),
+        lt(interestSnapshots.snapshotDate, endOfDay)
+      )
+    ).limit(1);
+    if (existing.length > 0) {
+      await db.update(interestSnapshots).set({ snapshotDate, interestUsd, interestCount, principalUsd }).where(eq(interestSnapshots.id, existing[0].id));
+    } else {
+      await db.insert(interestSnapshots).values({
+        snapshotDate,
+        accountName,
+        interestUsd,
+        interestCount,
+        principalUsd
+      });
+    }
+  } catch (error) {
+    console.error("[Database] Failed to insert interest snapshot:", error);
   }
 }
 
@@ -596,21 +634,30 @@ var systemRouter = router({
 
 // server/lib/bitfinex.ts
 import crypto from "crypto";
+var lastNonce = 0;
+function nextNonce() {
+  let nonce = Date.now() * 1e3;
+  if (nonce <= lastNonce) {
+    nonce = lastNonce + 1;
+  }
+  lastNonce = nonce;
+  return nonce.toString();
+}
 async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   const now = Date.now();
   const start = now - 24 * 60 * 60 * 1e3;
-  const nonce = (now * 1e3).toString();
   const apiPath = "v2/auth/r/ledgers/hist";
   const bodyStr = JSON.stringify({ category: 28, limit: 2500, start, end: now });
-  const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
-  const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
-  const headers = {
-    "bfx-nonce": nonce,
-    "bfx-apikey": apiKey,
-    "bfx-signature": signature,
-    "Content-Type": "application/json"
-  };
   for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json"
+    };
     try {
       const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
         method: "POST",
@@ -652,9 +699,60 @@ async function fetchDailyInterest(apiKey, apiSecret, accountName, retries = 3) {
   }
   return { accountName, totalInterest: 0, currency: "USD", entries: 0, error: "Max retries exceeded" };
 }
+async function fetchFundingBalance(apiKey, apiSecret, retries = 3) {
+  const apiPath = "v2/auth/r/wallets";
+  const bodyStr = "{}";
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signaturePayload = `/api/${apiPath}${nonce}${bodyStr}`;
+    const signature = crypto.createHmac("sha384", apiSecret).update(signaturePayload).digest("hex");
+    const headers = {
+      "bfx-nonce": nonce,
+      "bfx-apikey": apiKey,
+      "bfx-signature": signature,
+      "Content-Type": "application/json"
+    };
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers,
+        body: bodyStr
+      });
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error(`Unexpected response: ${JSON.stringify(data)}`);
+      }
+      if (data[0] === "error") {
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1e3);
+          continue;
+        }
+        return 0;
+      }
+      let principal = 0;
+      for (const wallet of data) {
+        if (Array.isArray(wallet) && wallet[0] === "funding" && typeof wallet[2] === "number") {
+          principal += wallet[2];
+        }
+      }
+      return principal;
+    } catch {
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1e3);
+      } else {
+        return 0;
+      }
+    }
+  }
+  return 0;
+}
 async function fetchAllAccountsInterest(accounts) {
   return Promise.all(
-    accounts.map((acc) => fetchDailyInterest(acc.key, acc.secret, acc.name))
+    accounts.map(async (acc) => {
+      const interest = await fetchDailyInterest(acc.key, acc.secret, acc.name);
+      const principal = await fetchFundingBalance(acc.key, acc.secret);
+      return { ...interest, principal };
+    })
   );
 }
 function sleep(ms) {
@@ -746,6 +844,13 @@ function sleep2(ms) {
 }
 
 // server/cron/daily-report.ts
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} \u903E\u6642\uFF08${ms}ms\uFF09`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 async function runDailyReport() {
   const startTime = Date.now();
   console.log(`[CronJob] \u958B\u59CB\u57F7\u884C\u6BCF\u65E5\u5229\u606F\u5831\u544A - ${(/* @__PURE__ */ new Date()).toISOString()}`);
@@ -786,6 +891,25 @@ async function runDailyReport() {
   const message = formatInterestReport(results, executedAt);
   console.log("[CronJob] \u767C\u9001 Telegram \u901A\u77E5...");
   const telegramResult = await sendTelegramMessage(telegramBotToken, telegramChatId, message);
+  try {
+    await withTimeout(
+      Promise.all(
+        results.filter((r) => !r.error).map(
+          (r) => insertInterestSnapshot(
+            executedAt,
+            r.accountName,
+            r.totalInterest.toString(),
+            r.entries,
+            r.principal && r.principal > 0 ? r.principal.toString() : null
+          )
+        )
+      ),
+      8e3,
+      "\u5229\u606F\u5FEB\u7167\u5BEB\u5165"
+    );
+  } catch (err) {
+    console.error("[CronJob] \u5229\u606F\u5FEB\u7167\u5BEB\u5165\u5931\u6557\u6216\u903E\u6642:", err);
+  }
   const elapsed = ((Date.now() - startTime) / 1e3).toFixed(2);
   const mappedResults = results.map((r) => ({
     account: r.accountName,

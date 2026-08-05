@@ -95,7 +95,7 @@ export async function getUserByOpenId(openId: string) {
 // ===== Interest Snapshot Queries =====
 
 import { interestSnapshots } from "../drizzle/schema";
-import { gte, desc } from "drizzle-orm";
+import { gte, lt, desc, and } from "drizzle-orm";
 
 /**
  * 查詢過去 N 天的利息快照
@@ -144,8 +144,10 @@ export async function queryInterestSnapshotsByAccount(
       .select()
       .from(interestSnapshots)
       .where(
-        gte(interestSnapshots.snapshotDate, startDate) &&
+        and(
+          gte(interestSnapshots.snapshotDate, startDate),
           eq(interestSnapshots.accountName, accountName)
+        )
       )
       .orderBy(desc(interestSnapshots.snapshotDate));
   } catch (error) {
@@ -155,13 +157,15 @@ export async function queryInterestSnapshotsByAccount(
 }
 
 /**
- * 新增利息快照
+ * 寫入利息快照：同一帳戶同一日（UTC 日曆日）僅保留一筆，重複執行時覆蓋更新，
+ * 避免手動觸發或重跑時重複累加利息。
  */
 export async function insertInterestSnapshot(
   snapshotDate: Date,
   accountName: string,
   interestUsd: string,
-  interestCount: number
+  interestCount: number,
+  principalUsd: string | null
 ) {
   const db = await getDb();
   if (!db) {
@@ -169,13 +173,38 @@ export async function insertInterestSnapshot(
     return;
   }
 
+  const startOfDay = new Date(
+    Date.UTC(snapshotDate.getUTCFullYear(), snapshotDate.getUTCMonth(), snapshotDate.getUTCDate())
+  );
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
   try {
-    await db.insert(interestSnapshots).values({
-      snapshotDate,
-      accountName,
-      interestUsd,
-      interestCount,
-    });
+    const existing = await db
+      .select({ id: interestSnapshots.id })
+      .from(interestSnapshots)
+      .where(
+        and(
+          eq(interestSnapshots.accountName, accountName),
+          gte(interestSnapshots.snapshotDate, startOfDay),
+          lt(interestSnapshots.snapshotDate, endOfDay)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(interestSnapshots)
+        .set({ snapshotDate, interestUsd, interestCount, principalUsd })
+        .where(eq(interestSnapshots.id, existing[0].id));
+    } else {
+      await db.insert(interestSnapshots).values({
+        snapshotDate,
+        accountName,
+        interestUsd,
+        interestCount,
+        principalUsd,
+      });
+    }
   } catch (error) {
     console.error("[Database] Failed to insert interest snapshot:", error);
   }

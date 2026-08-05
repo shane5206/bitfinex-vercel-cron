@@ -39,6 +39,8 @@ export const interestSnapshots = mysqlTable("interestSnapshots", {
   interestUsd: text("interestUsd").notNull(),
   /** 該帳戶該日期的利息筆數 */
   interestCount: int("interestCount").notNull(),
+  /** 該帳戶該日期的 funding 錢包本金 (USD)，用於計算年化報酬率 */
+  principalUsd: text("principalUsd"),
   /** 記錄建立時間 */
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
