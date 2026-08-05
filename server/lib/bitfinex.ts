@@ -1,14 +1,74 @@
 import crypto from "crypto";
 
 // Bitfinex 要求同一 API key 的 nonce 嚴格遞增；用全域單調計數器避免同毫秒碰撞。
+// 必須全專案共用此計數器（放貸機器人也會呼叫），否則不同模組會產生重複 nonce。
 let lastNonce = 0;
-function nextNonce(): string {
+export function nextNonce(): string {
   let nonce = Date.now() * 1000;
   if (nonce <= lastNonce) {
     nonce = lastNonce + 1;
   }
   lastNonce = nonce;
   return nonce.toString();
+}
+
+/**
+ * 呼叫 Bitfinex 認證端點（POST）的共用函式，含簽名與重試。
+ *
+ * 注意：呼叫端必須「序列化」同一把 API key 的請求（依序 await，不可 Promise.all），
+ * 否則併發請求會讓 Bitfinex 回報 nonce: small。
+ */
+export async function bitfinexAuthRequest<T = unknown>(
+  apiKey: string,
+  apiSecret: string,
+  apiPath: string,
+  body: Record<string, unknown> = {},
+  retries = 3
+): Promise<T> {
+  const bodyStr = JSON.stringify(body);
+  let lastError = "Max retries exceeded";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const nonce = nextNonce();
+    const signature = crypto
+      .createHmac("sha384", apiSecret)
+      .update(`/api/${apiPath}${nonce}${bodyStr}`)
+      .digest("hex");
+
+    try {
+      const res = await fetch(`https://api.bitfinex.com/${apiPath}`, {
+        method: "POST",
+        headers: {
+          "bfx-nonce": nonce,
+          "bfx-apikey": apiKey,
+          "bfx-signature": signature,
+          "Content-Type": "application/json",
+        },
+        body: bodyStr,
+      });
+
+      const data = (await res.json()) as unknown;
+
+      // 錯誤回應格式：["error", CODE, "message"]
+      if (Array.isArray(data) && data[0] === "error") {
+        lastError = `API Error: ${data[2] ?? data[1]}`;
+        if (attempt < retries) {
+          await sleep(Math.pow(2, attempt) * 1000);
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      return data as T;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (attempt < retries) {
+        await sleep(Math.pow(2, attempt) * 1000);
+      }
+    }
+  }
+
+  throw new Error(lastError);
 }
 
 export interface InterestResult {

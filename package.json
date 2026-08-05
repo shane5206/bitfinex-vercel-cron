@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/vercel-entry.ts --platform=node --packages=external --bundle --format=esm --outfile=api/index.js && esbuild server/cron-vercel-entry.ts --platform=node --packages=external --bundle --format=esm --outfile=api/cron/daily-report.js",
+    "build": "vite build && esbuild server/vercel-entry.ts --platform=node --packages=external --bundle --format=esm --outfile=api/index.js && esbuild server/cron-vercel-entry.ts --platform=node --packages=external --bundle --format=esm --outfile=api/cron/daily-report.js && esbuild server/funding-bot-vercel-entry.ts --platform=node --packages=external --bundle --format=esm --outfile=api/funding-bot.js",
     "start": "NODE_ENV=production node dist/server.js",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
@@ -47,7 +47,6 @@
     "@trpc/react-query": "^11.6.0",
     "@trpc/server": "^11.6.0",
     "axios": "^1.12.0",
-    "bitfinex-api-node": "^8.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
