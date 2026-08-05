@@ -46,9 +46,23 @@
 
 | 變數 | 說明 |
 | --- | --- |
-| `FUNDING_BOT_API_KEY` | 上一步的專用金鑰（未設定會回退用 `BITFINEX_ACCOUNT1_KEY`） |
-| `FUNDING_BOT_API_SECRET` | 專用金鑰的 secret |
+| `FUNDING_BOT_ACCOUNTS` | 要操作的帳戶編號，逗號分隔。單帳戶填 `1`，兩個帳戶填 `1,2`（預設 `1`） |
+| `FUNDING_BOT_ACCOUNT1_KEY` | 帳戶 1 的專用金鑰 |
+| `FUNDING_BOT_ACCOUNT1_SECRET` | 帳戶 1 的 secret |
+| `FUNDING_BOT_ACCOUNT2_KEY` | 帳戶 2 的專用金鑰（只有一個帳戶就不用設） |
+| `FUNDING_BOT_ACCOUNT2_SECRET` | 帳戶 2 的 secret |
 | `CRON_SECRET` | 端點驗證用；**未設定機器人會拒絕執行** |
+
+金鑰查找順序（由專用到通用），第一個找得到的就會被採用：
+
+1. `FUNDING_BOT_ACCOUNT{N}_KEY` / `_SECRET` ← **建議**，只開放貸權限
+2. `FUNDING_BOT_API_KEY` / `_SECRET`（僅帳戶 1，向下相容單帳戶設定）
+3. `BITFINEX_ACCOUNT{N}_KEY` / `_SECRET`（沿用每日報告的金鑰，可能是唯讀而無法下單）
+
+帳戶名稱沿用每日報告的 `BITFINEX_ACCOUNT{N}_NAME`，未設定時顯示為「帳戶 N」。
+
+> 兩個帳戶請務必使用**各自不同**的 API 金鑰。若偵測到重複金鑰，重複的帳戶會被自動略過，
+> 以免同一把 key 被併發操作而觸發 `nonce: small`。
 
 ### 開關
 
@@ -92,7 +106,8 @@ Vercel Hobby 的內建 cron 一天只會觸發一次，所以改用外部服務�
    ```bash
    curl -H "Authorization: Bearer <CRON_SECRET>" https://<你的網域>/api/funding-bot
    ```
-   確認 `frrApy` 與 App 顯示的 FRR 相符、`deployable` 等於你的閒置資金。
+   回傳的 `accounts` 陣列每個帳戶一筆，各自包含 `currencies`。逐一確認
+   `frrApy` 與 App 顯示的 FRR 相符、`deployable` 等於該帳戶的閒置資金。
 3. 確認無誤後把 `FUNDING_BOT_DRY_RUN` 改成 `false`。
 4. 前幾天用 `FUNDING_BOT_NOTIFY=always` 觀察每次動作，穩定後改回 `changes`。
 
