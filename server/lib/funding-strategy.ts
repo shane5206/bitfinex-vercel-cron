@@ -50,6 +50,13 @@ export interface ExistingOffer {
   period: number;
 }
 
+/**
+ * Bitfinex 單筆放貸的最低金額：150 USD 或等值。
+ * 低於此值送出會被 API 拒絕。
+ * 來源：https://support.bitfinex.com/hc/en-us/articles/213918949-What-is-the-minimum-offer-for-Funding
+ */
+export const BITFINEX_MIN_FUNDING_OFFER = 150;
+
 /** 平衡型預設 ladder：30% 貼著 FRR 保成交，其餘往上要溢價 */
 export const DEFAULT_LADDER: LadderTier[] = [
   { pct: 30, mult: 1.0 },
@@ -136,18 +143,20 @@ export function planOffers(
   let tiers = cfg.tiers.filter((t) => t.pct > 0 && t.mult > 0).slice(0, cfg.maxOffers);
   if (tiers.length === 0) return [];
 
-  // 逐步剔除金額過小的層級，剩餘資金按權重重新分配
+  // 逐步剔除金額過小的層級，剩餘資金按權重重新分配。
+  // 剔除時優先拿掉「倍數最高」的層而非金額最小的層：資金不足時最該保住
+  // 貼近 FRR、確定借得出去的那層，否則錢會全掛在高價空等而賺不到利息。
   while (tiers.length > 1) {
     const weight = tiers.reduce((sum, t) => sum + t.pct, 0);
     const amounts = tiers.map((t) => (deployable * t.pct) / weight);
 
-    let minIdx = 0;
-    for (let i = 1; i < amounts.length; i++) {
-      if (amounts[i] < amounts[minIdx]) minIdx = i;
-    }
-    if (amounts[minIdx] >= cfg.minOfferAmount) break;
+    if (Math.min(...amounts) >= cfg.minOfferAmount) break;
 
-    tiers = tiers.filter((_, i) => i !== minIdx);
+    let dropIdx = 0;
+    for (let i = 1; i < tiers.length; i++) {
+      if (tiers[i].mult > tiers[dropIdx].mult) dropIdx = i;
+    }
+    tiers = tiers.filter((_, i) => i !== dropIdx);
   }
 
   const weight = tiers.reduce((sum, t) => sum + t.pct, 0);

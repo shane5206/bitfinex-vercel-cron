@@ -8,6 +8,7 @@
  * 預設仍為 dry-run（只計算與記錄，不會真的下單）。
  */
 import {
+  BITFINEX_MIN_FUNDING_OFFER,
   DEFAULT_LADDER,
   dailyRateToApy,
   needsRequote,
@@ -144,7 +145,7 @@ export function loadStrategyConfig(): StrategyConfig {
     basePeriodDays: Math.round(envNum("FUNDING_BOT_PERIOD_DAYS", 2)),
     spikeApy: envNum("FUNDING_BOT_SPIKE_APY", 25),
     spikePeriodDays: Math.round(envNum("FUNDING_BOT_SPIKE_PERIOD", 30)),
-    minOfferAmount: envNum("FUNDING_BOT_MIN_OFFER", 50),
+    minOfferAmount: envNum("FUNDING_BOT_MIN_OFFER", BITFINEX_MIN_FUNDING_OFFER),
     maxOffers: Math.round(envNum("FUNDING_BOT_MAX_OFFERS", 5)),
   };
 }
