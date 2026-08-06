@@ -23,6 +23,17 @@ const cfg: StrategyConfig = {
   maxOffers: 5,
 };
 
+// 機制測試專用的三層 ladder。刻意與 DEFAULT_LADDER 脫鉤，
+// 這樣調整預設策略時不會讓分配機制的測試跟著壞掉。
+const cfg3: StrategyConfig = {
+  ...cfg,
+  tiers: [
+    { pct: 30, mult: 1.0 },
+    { pct: 40, mult: 1.3 },
+    { pct: 30, mult: 1.8 },
+  ],
+};
+
 // 使用者實際數據：本金約 10,952 USD，FRR 每日 0.033873%
 const REAL_FRR = 0.00033873;
 const REAL_DEPLOYABLE = 10952.13;
@@ -45,7 +56,7 @@ describe("利率單位換算", () => {
 
 describe("planOffers 基本 ladder", () => {
   it("應依 30/40/30 權重產生三筆掛單", () => {
-    const offers = planOffers(REAL_DEPLOYABLE, REAL_FRR, cfg);
+    const offers = planOffers(REAL_DEPLOYABLE, REAL_FRR, cfg3);
 
     expect(offers).toHaveLength(3);
     expect(offers[0].amount).toBeCloseTo(3285.63, 2);
@@ -54,7 +65,7 @@ describe("planOffers 基本 ladder", () => {
   });
 
   it("報價應為 FRR 的 1.0 / 1.3 / 1.8 倍", () => {
-    const offers = planOffers(REAL_DEPLOYABLE, REAL_FRR, cfg);
+    const offers = planOffers(REAL_DEPLOYABLE, REAL_FRR, cfg3);
 
     expect(offers[0].rate).toBeCloseTo(REAL_FRR, 8);
     expect(offers[1].rate).toBeCloseTo(REAL_FRR * 1.3, 8);
@@ -127,7 +138,7 @@ describe("異常輸入時不得掛單", () => {
 describe("小額資金重新分配", () => {
   it("層級金額低於最小單位時應剔除並把資金分給其他層", () => {
     // 360 依 30/40/30 分配為 108/144/108，三層皆低於 150
-    const offers = planOffers(360, REAL_FRR, cfg);
+    const offers = planOffers(360, REAL_FRR, cfg3);
 
     expect(offers).toHaveLength(2);
     for (const offer of offers) {
@@ -145,11 +156,46 @@ describe("小額資金重新分配", () => {
   });
 
   it("資金不足時應保留低倍數層、剔除高倍數層", () => {
-    const offers = planOffers(360, REAL_FRR, cfg);
+    const offers = planOffers(360, REAL_FRR, cfg3);
 
     // 應留下 1.0 與 1.3 倍，而不是把最容易成交的 FRR 層丟掉
     expect(offers.map((o) => o.mult)).toEqual([1.0, 1.3]);
     expect(offers[0].rate).toBeCloseTo(REAL_FRR, 8);
+  });
+});
+
+describe("預設 ladder 必須貼近 FRR", () => {
+  // 2026-08 實測 fUSD 掛單簿：整本書最高借款出價僅約 10.25% APY，
+  // 同時間 FRR 為 12.35%。高於 FRR 的報價沒有對手方，掛上去必然閒置賺 0。
+  const BOOK_MAX_BID_APY = 10.25;
+  const OBSERVED_FRR_APY = 12.35;
+
+  it("不得有明顯高於 FRR 的層級", () => {
+    for (const tier of DEFAULT_LADDER) {
+      expect(tier.mult).toBeLessThanOrEqual(1.2);
+    }
+  });
+
+  it("主力資金應貼著 FRR 以確保成交", () => {
+    const atFrr = DEFAULT_LADDER.filter((t) => t.mult <= 1.0);
+    const weightAtFrr = atFrr.reduce((sum, t) => sum + t.pct, 0);
+    const total = DEFAULT_LADDER.reduce((sum, t) => sum + t.pct, 0);
+
+    expect(weightAtFrr / total).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("實測市況下，貼著 FRR 的那層報價不應離譜地高於市場最佳出價", () => {
+    const offers = planOffers(REAL_DEPLOYABLE, REAL_FRR, {
+      ...cfg,
+      tiers: DEFAULT_LADDER,
+    });
+    const cheapest = Math.min(...offers.map((o) => dailyRateToApy(o.rate)));
+
+    // 最低價那層應「正好等於 FRR」，不得再往上加價
+    expect(cheapest).toBeCloseTo(dailyRateToApy(REAL_FRR), 6);
+    // 對照觀測值：FRR 本身就已高於掛單簿上所有出價
+    expect(cheapest).toBeCloseTo(OBSERVED_FRR_APY, 1);
+    expect(cheapest).toBeGreaterThan(BOOK_MAX_BID_APY);
   });
 });
 

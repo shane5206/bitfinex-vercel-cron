@@ -4,9 +4,8 @@ import "dotenv/config";
 // server/lib/funding-strategy.ts
 var BITFINEX_MIN_FUNDING_OFFER = 150;
 var DEFAULT_LADDER = [
-  { pct: 30, mult: 1 },
-  { pct: 40, mult: 1.3 },
-  { pct: 30, mult: 1.8 }
+  { pct: 80, mult: 1 },
+  { pct: 20, mult: 1.15 }
 ];
 function apyToDailyRate(apy) {
   return apy / 100 / 365;
@@ -306,7 +305,8 @@ function loadStrategyConfig() {
     minRateApy: envNum("FUNDING_BOT_MIN_RATE_APY", 6),
     frrFloorMult: envNum("FUNDING_BOT_FRR_FLOOR_MULT", 0.8),
     basePeriodDays: Math.round(envNum("FUNDING_BOT_PERIOD_DAYS", 2)),
-    spikeApy: envNum("FUNDING_BOT_SPIKE_APY", 25),
+    // 研究與實測皆顯示 15% 以上即值得拉長天期鎖利，原本的 25% 門檻過高
+    spikeApy: envNum("FUNDING_BOT_SPIKE_APY", 15),
     spikePeriodDays: Math.round(envNum("FUNDING_BOT_SPIKE_PERIOD", 30)),
     minOfferAmount: envNum("FUNDING_BOT_MIN_OFFER", BITFINEX_MIN_FUNDING_OFFER),
     maxOffers: Math.round(envNum("FUNDING_BOT_MAX_OFFERS", 5))

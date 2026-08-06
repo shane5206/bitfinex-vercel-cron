@@ -57,11 +57,17 @@ export interface ExistingOffer {
  */
 export const BITFINEX_MIN_FUNDING_OFFER = 150;
 
-/** 平衡型預設 ladder：30% 貼著 FRR 保成交，其餘往上要溢價 */
+/**
+ * 預設 ladder：以「資金利用率」為優先，而非往上要高價。
+ *
+ * 依據 2026-08 實測的 fUSD 掛單簿：整本書最高的借款出價僅約 10.25% APY，
+ * 而同時間 FRR 為 12.35%。也就是說任何高於 FRR 的報價都沒有對手方，
+ * 掛上去必然閒置賺 0。實測亦顯示約 19% 資金空轉造成約 2.4 個百分點的損失，
+ * 遠大於調價可能帶來的收益，因此主力貼著 FRR，僅保留小部分捕捉突發行情。
+ */
 export const DEFAULT_LADDER: LadderTier[] = [
-  { pct: 30, mult: 1.0 },
-  { pct: 40, mult: 1.3 },
-  { pct: 30, mult: 1.8 },
+  { pct: 80, mult: 1.0 },
+  { pct: 20, mult: 1.15 },
 ];
 
 /** 年化 %（單利）換算成每日利率小數 */
